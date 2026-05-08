@@ -6,9 +6,16 @@
 
 @implementation TermsManager
 
+static BOOL b1Processing = NO;
+static BOOL b1Finished = NO;
+
+static BOOL b2Processing = NO;
+static BOOL b2Finished = NO;
+
+static UIAlertController *currentAlert = nil;
+
 + (void)showTermsDialog {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 1. Lấy Key Window và RootVC
         UIWindow *window = nil;
         if (@available(iOS 13.0, *)) {
             for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
@@ -23,46 +30,76 @@
         }
         
         UIViewController *rootVC = window.rootViewController;
-        if (!rootVC) return;
+        if (!rootVC || rootVC.presentedViewController) return;
 
-        // 2. Tạo Alert Controller
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Hi User!"
-                                                                       message:@"Click \"Activate\" and wait 30 seconds to unlock."
-                                                                      
-                                                                preferredStyle:UIAlertControllerStyleAlert];
+        // 1. Update English Message
+        NSString *msg = @"Please follow the steps in order.";
+        if (b1Processing) msg = @"⏳ Verifying \"Step 1\"...\nPlease complete the task on the previous page.";
+        else if (b1Finished && !b2Processing) msg = @"✅ Step 1 Complete! Now activate Step 2.";
+        else if (b2Processing) msg = @"⏳ Verifying \"Step 2\"...\nPlease complete the task on the previous page.";
 
-        // 3. Tạo nút "Read" 
-        // Lưu ý: Vì UIAlertAction luôn đóng alert khi nhấn, chúng ta sẽ mở link 
-        // và hiện lại 1 alert mới hoặc thay đổi thuộc tính nếu alert cũ chưa bị hủy.
-        UIAlertAction *readAction = [UIAlertAction actionWithTitle:@"Activate"
-                                                             style:UIAlertActionStyleDestructive
-                                                           handler:^(UIAlertAction * _Nonnull action) {
-            
-            // Mở link điều khoản
-            NSURL *url = [NSURL URLWithString:@"https://bio.binhbun.com/api/index.html"];
-            [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        currentAlert = [UIAlertController alertControllerWithTitle:@"Hi User!"
+                                                           message:msg
+                                                    preferredStyle:UIAlertControllerStyleAlert];
 
-            // Đợi một chút để alert cũ đóng hẳn, sau đó hiện Alert "Check Read"
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // --- BUTTON 1 ---
+        NSString *t1 = b1Finished ? @"Step 1 ✅" : (b1Processing ? @"Checking..." : @"Step 1");
+        UIAlertAction *a1 = [UIAlertAction actionWithTitle:t1 style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            if (!b1Processing && !b1Finished) {
+                b1Processing = YES;
+                [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://bio.binhbun.com/api/index.html"] options:@{} completionHandler:nil];
                 
-                UIAlertController *checkAlert = [UIAlertController alertControllerWithTitle:@"Check Activate"
-                                                                                   message:@"Wait 30 seconds to unlock, on the \"Activate\" page to unlock."
-                                                                            preferredStyle:UIAlertControllerStyleAlert];
-                
-                [rootVC presentViewController:checkAlert animated:YES completion:^{
-                    // Đóng sau 30 giây kể từ lúc hiện "check read"
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                        [checkAlert dismissViewControllerAnimated:YES completion:nil];
-                    });
-                }];
-            });
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    b1Processing = NO;
+                    b1Finished = YES;
+                    [self refreshAlert:rootVC];
+                });
+            }
+            [self refreshAlert:rootVC];
         }];
 
-        [alert addAction:readAction];
+        // Color Logic: Green if processing or finished
+        if (b1Processing || b1Finished) {
+            [a1 setValue:[UIColor systemGreenColor] forKey:@"titleTextColor"];
+        }
 
-        // 4. Hiển thị Alert đầu tiên
-        [rootVC presentViewController:alert animated:YES completion:nil];
+        // --- BUTTON 2 ---
+        NSString *t2 = b2Processing ? @"Checking..." : @"Step 2";
+        UIAlertAction *a2 = [UIAlertAction actionWithTitle:t2 style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            if (b1Finished && !b2Processing) {
+                b2Processing = YES;
+                [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://bio.binhbun.com/api1/index.html"] options:@{} completionHandler:nil];
+                
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [currentAlert dismissViewControllerAnimated:YES completion:nil];
+                    // Reset states if needed for next launch
+                    b2Processing = NO;
+                    b2Finished = YES;
+                });
+            }
+            [self refreshAlert:rootVC];
+        }];
+
+        // Button 2 Styling: Gray if locked, Green if checking
+        if (!b1Finished) {
+            [a2 setValue:[UIColor grayColor] forKey:@"titleTextColor"];
+        } else if (b2Processing) {
+            [a2 setValue:[UIColor systemGreenColor] forKey:@"titleTextColor"];
+        }
+
+        [currentAlert addAction:a1];
+        [currentAlert addAction:a2];
+        [rootVC presentViewController:currentAlert animated:YES completion:nil];
     });
+}
+
+// Helper to refresh UI without overlapping alerts
++ (void)refreshAlert:(UIViewController *)rootVC {
+    if (currentAlert) {
+        [currentAlert dismissViewControllerAnimated:NO completion:^{
+            [self showTermsDialog];
+        }];
+    }
 }
 
 static __attribute__((constructor)) void initialize() {
