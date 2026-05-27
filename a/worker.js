@@ -90,3 +90,294 @@ export default {
     return new Response("Not found", { status: 404 });
   }
 };
+
+
+
+
+const DEFAULT_AES_KEY_HEX = "bf5135f9b4b0c0ad711907a0947b486e";
+
+const LICENCES = {
+  "NgocBongGaming-day-4zy8KzsZpmaqFlin": {
+    isExpired : false,
+    expiredAt : "9999-01-01T06:41:57.000Z",
+    status    : 1,
+  },
+};
+
+const SECURITY_HEADERS = {
+  "content-security-policy":
+    "default-src 'self';" +
+    "base-uri 'self';" +
+    "font-src 'self' https: data:;" +
+    "form-action 'self';" +
+    "frame-ancestors 'self';" +
+    "img-src 'self' data:;" +
+    "object-src 'none';" +
+    "script-src 'self';" +
+    "script-src-attr 'none';" +
+    "style-src 'self' https: 'unsafe-inline';" +
+    "upgrade-insecure-requests",
+  "cross-origin-embedder-policy"     : "require-corp",
+  "cross-origin-opener-policy"       : "same-origin",
+  "cross-origin-resource-policy"     : "same-origin",
+  "origin-agent-cluster"             : "?1",
+  "referrer-policy"                  : "no-referrer",
+  "x-content-type-options"           : "nosniff",
+  "x-dns-prefetch-control"           : "off",
+  "x-download-options"               : "noopen",
+  "x-frame-options"                  : "SAMEORIGIN",
+  "x-permitted-cross-domain-policies": "none",
+  "x-xss-protection"                 : "0",
+  "cf-cache-status"                  : "DYNAMIC",
+  "access-control-expose-headers"    : "token",
+  "vary"                             : "Origin",
+};
+
+function isValidEncryptedToken(token) {
+  if (typeof token !== "string" || token.length === 0) return false;
+  try {
+    const bin = atob(token);
+    return bin.length > 0 && bin.length % 16 === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function importAesKey(hexKey) {
+  const raw = new TextEncoder().encode(hexKey);
+  return crypto.subtle.importKey("raw", raw, { name: "AES-CBC" }, false, ["encrypt", "decrypt"]);
+}
+
+function pkcs7Pad(buf) {
+  const padLen = 16 - (buf.length % 16);
+  const out = new Uint8Array(buf.length + padLen);
+  out.set(buf);
+  out.fill(padLen, buf.length);
+  return out;
+}
+
+function pkcs7Unpad(buf) {
+  const padLen = buf[buf.length - 1];
+  if (padLen < 1 || padLen > 16) throw new Error("Invalid PKCS7 padding");
+  return buf.slice(0, buf.length - padLen);
+}
+
+async function aesEcbEncrypt(keyHex, plaintext) {
+  const key    = await importAesKey(keyHex);
+  const padded = pkcs7Pad(plaintext);
+  const out    = new Uint8Array(padded.length);
+  const zeroIV = new Uint8Array(16);
+
+  for (let i = 0; i < padded.length; i += 16) {
+    const enc = await crypto.subtle.encrypt(
+      { name: "AES-CBC", iv: zeroIV },
+      key,
+      padded.slice(i, i + 16)
+    );
+    out.set(new Uint8Array(enc).slice(0, 16), i);
+  }
+  return out;
+}
+
+async function aesEcbDecrypt(keyHex, ciphertext) {
+  const key    = await importAesKey(keyHex);
+  const out    = new Uint8Array(ciphertext.length);
+  const zeroIV = new Uint8Array(16);
+
+  for (let i = 0; i < ciphertext.length; i += 16) {
+    const block = ciphertext.slice(i, i + 16);
+
+    const padXorBlock = new Uint8Array(16);
+    for (let j = 0; j < 16; j++) padXorBlock[j] = 0x10 ^ block[j];
+
+    const dummyBlock = new Uint8Array(
+      await crypto.subtle.encrypt({ name: "AES-CBC", iv: zeroIV }, key, padXorBlock)
+    ).slice(0, 16);
+
+    const twoBlocks = new Uint8Array(32);
+    twoBlocks.set(block, 0);
+    twoBlocks.set(dummyBlock, 16);
+
+    const dec = await crypto.subtle.decrypt(
+      { name: "AES-CBC", iv: zeroIV },
+      key,
+      twoBlocks,
+    );
+    out.set(new Uint8Array(dec).slice(0, 16), i);
+  }
+  return pkcs7Unpad(out);
+}
+
+function bytesToBase64(buf) {
+  let bin = "";
+  for (const b of buf) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+const te = new TextEncoder();
+const td = new TextDecoder();
+
+/**
+ * Xáo trộn thứ tự field của object — giống App 1.
+ * Mỗi lần JSON.stringify ra chuỗi khác → block đầu ECB khác → toàn bộ cipher khác.
+ */
+function shuffleObject(obj) {
+  const keys = Object.keys(obj);
+  // Fisher-Yates shuffle dùng crypto random
+  const rnd = crypto.getRandomValues(new Uint8Array(keys.length));
+  for (let i = keys.length - 1; i > 0; i--) {
+    const j = rnd[i] % (i + 1);
+    [keys[i], keys[j]] = [keys[j], keys[i]];
+  }
+  const shuffled = {};
+  for (const k of keys) shuffled[k] = obj[k];
+  return shuffled;
+}
+
+async function encryptResponse(keyHex, obj) {
+  const shuffled = shuffleObject(obj);
+  const cipher   = await aesEcbEncrypt(keyHex, te.encode(JSON.stringify(shuffled)));
+  return bytesToBase64(cipher);
+}
+
+async function decryptPayload(keyHex, b64) {
+  const plain = await aesEcbDecrypt(keyHex, base64ToBytes(b64));
+  return JSON.parse(td.decode(plain));
+}
+
+async function computeEtag(body) {
+  const digest = await crypto.subtle.digest("SHA-1", te.encode(body));
+  const b64    = bytesToBase64(new Uint8Array(digest)).replace(/=+$/, "");
+  return `W/"${body.length.toString(16)}-${b64}"`;
+}
+
+async function json(obj, status = 200) {
+  const body = JSON.stringify(obj);
+  const etag = await computeEtag(body);
+
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type"             : "application/json; charset=utf-8",
+      ...SECURITY_HEADERS,
+      "strict-transport-security": "max-age=15552000; includeSubDomains",
+      "etag"                     : etag,
+    },
+  });
+}
+
+export default {
+  async fetch(request, env) {
+    const KEY_HEX = env.AES_KEY_HEX || DEFAULT_AES_KEY_HEX;
+    const method  = request.method;
+    const path    = new URL(request.url).pathname;
+
+    if (method === "OPTIONS") {
+      return await json({ error: "Not found" }, 404);
+    }
+
+    if (method !== "POST") {
+      return await json({ error: "Method not allowed" }, 405);
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return await json({ error: "Invalid JSON body" }, 400);
+    }
+
+    // ── POST /public/v1/client/package ────────────────────────────────────────
+    if (path === "/public/v1/client/package") {
+      const { token } = body;
+
+      if (!token) {
+        return await json({ error: "Missing token" }, 400);
+      }
+
+      if (!isValidEncryptedToken(token)) {
+        return await json({ error: "Invalid token format" }, 403);
+      }
+      
+      const data = await encryptResponse(KEY_HEX, {
+        requestTime       : Date.now(),
+        name              : "Delta VNG & Skibx VNG",
+        updateNote        : "",
+        downloadUpdateLink: "",
+        isNeedKey         : true,
+        status            : 1,
+        version           : "1.1.8",
+        contactUrl        : "",
+      });
+
+      return await json({ data });
+    }
+
+    // ── POST /public/v1/client/check ──────────────────────────────────────────
+    if (path === "/public/v1/client/check") {
+      const { token, data } = body;
+
+      if (!token || !data) {
+        return await json({ error: "Missing token or data" }, 400);
+      }
+
+      if (!isValidEncryptedToken(token)) {
+        return await json({ error: "Invalid token format" }, 403);
+      }
+
+      let deviceInfo;
+      try {
+        deviceInfo = await decryptPayload(KEY_HEX, data);
+      } catch (e) {
+        return await json({ error: "Invalid encrypted payload: " + e.message }, 400);
+      }
+
+      const { uid } = deviceInfo;
+      if (!uid) {
+        return await json({ error: "Missing uid in device info" }, 400);
+      }
+      const licenceKey = "NgocBongGaming-day-4zy8KzsZpmaqFlin";
+      const licence    = LICENCES[licenceKey];
+
+      const encrypted = await encryptResponse(KEY_HEX, {
+        requestTime: Date.now(),
+        isExpired  : licence.isExpired,
+        expiredAt  : licence.expiredAt,
+        status     : licence.status,
+        key        : licenceKey,
+      });
+
+      return await json({ data: encrypted });
+    }
+
+    // ── POST /debug/encrypt ───────────────────────────────────────────────────
+    if (path === "/debug/encrypt") {
+      const { plain } = body;
+      if (plain === undefined) return await json({ error: "Missing plain" }, 400);
+      const obj  = typeof plain === "string" ? { value: plain } : plain;
+      const data = await encryptResponse(KEY_HEX, obj);
+      return await json({ data });
+    }
+
+    // ── POST /debug/decrypt ───────────────────────────────────────────────────
+    if (path === "/debug/decrypt") {
+      const { data } = body;
+      if (!data) return await json({ error: "Missing data" }, 400);
+      try {
+        const plain = await decryptPayload(KEY_HEX, data);
+        return await json({ plain });
+      } catch (e) {
+        return await json({ error: e.message }, 400);
+      }
+    }
+
+    return await json({ error: "Not found" }, 404);
+  },
+};
