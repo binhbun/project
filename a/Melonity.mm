@@ -1,3 +1,176 @@
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#import <mach-o/dyld.h>
+
+#define _(x) x##_obf
+#define __(x) _##x##_
+#define ___(x) x##__##x
+
+static BOOL _g = NO;
+
+uintptr_t _f1() {
+    uint32_t _c = _dyld_image_count();
+    for (uint32_t _i = 0; _i < _c; _i++) {
+        const char *_n = _dyld_get_image_name(_i);
+        if (_n && strstr(_n, "MelonityNEW.dylib")) {
+            return _dyld_get_image_vmaddr_slide(_i);
+        }
+    }
+    return 0;
+}
+
+void _f2(id _i, SEL _s) {
+    if (!_i || !_s) return;
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    if ([_i respondsToSelector:_s]) {
+        [_i performSelector:_s];
+    }
+    #pragma clang diagnostic pop
+}
+
+void _f3() {
+    if (_g) return;
+    
+    uintptr_t _p = _f1();
+    if (_p == 0) return;
+    
+    Class _c = NSClassFromString(@"MenuLoad");
+    if (!_c) return;
+    
+    @try {
+        uintptr_t _a1 = _p + 0x94008;
+        if (_a1) {
+            void (*_f)(uintptr_t) = (void (*)(uintptr_t))_a1;
+            uintptr_t _a2 = _p + 0xF4E240;
+            uintptr_t _v = 0;
+            if (_a2) _v = *(uintptr_t*)_a2;
+            _f(_v);
+        }
+        
+        id _m = [[_c alloc] init];
+        if (!_m) return;
+        
+        uintptr_t _a3 = _p + 0xF4E248;
+        if (_a3) *(uintptr_t*)_a3 = (uintptr_t)CFBridgingRetain(_m);
+        
+        SEL _s = NSSelectorFromString(@"InitializeGestureRecognizers");
+        _f2(_m, _s);
+        _g = YES;
+    } @catch (NSException *__) {}
+}
+
+@interface NSURLSession (__)
+@end
+
+@implementation NSURLSession (__)
+
+- (NSURLSessionDataTask *)_m1:(NSURLRequest *)_r 
+             completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))_h {
+    
+    NSString *_u = _r.URL.absoluteString;
+    
+    if ([_u containsString:@"verifyformlbbcracknewonetig"] || 
+        [_u containsString:@"ske2.onrender.com"]) {
+
+        NSString *_j = @"{"
+                        "\"sa\":\"heng\","
+                        "\"banot\":\"MJXI\","
+                        "\"leng\":\"MJXI\","
+                        "\"expires\":\"heng\","
+                        "\"unregistered\":\"no\""
+                       "}";
+        
+        NSData *_d = [_j dataUsingEncoding:NSUTF8StringEncoding];
+        
+        NSHTTPURLResponse *_rsp = [[NSHTTPURLResponse alloc] initWithURL:_r.URL 
+                                                              statusCode:200 
+                                                             HTTPVersion:@"HTTP/1.1" 
+                                                            headerFields:@{@"Content-Type": @"application/json"}];
+        
+        void (^_cb)(NSData *, NSURLResponse *, NSError *) = ^(NSData *_, NSURLResponse *__, NSError *___) {
+            if (_h) _h(_d, _rsp, nil);
+        };
+        
+        return [self _m1:_r completionHandler:_cb];
+    }
+
+    return [self _m1:_r completionHandler:_h];
+}
+
+@end
+
+@interface UIAlertController (___)
+@end
+
+@implementation UIAlertController (___)
+
+- (void)_m2:(BOOL)_a {
+    
+    if (self.textFields.count > 0) {
+        UITextField *_tf = self.textFields.firstObject;
+        _tf.text = @"MJXI";
+        
+        for (UIAlertAction *_act in self.actions) {
+            if ([_act.title isEqualToString:@"OK"]) {
+                void (^_h)(UIAlertAction *) = [_act valueForKey:@"handler"];
+                if (_h) {
+                    [self dismissViewControllerAnimated:NO completion:^{
+                        _h(_act);
+                    }];
+                }
+                return;
+            }
+        }
+    }
+    
+    if ([self.title isEqualToString:@"Result"] || 
+        [self.message isEqualToString:@"heng"]) {
+        
+        for (UIAlertAction *_act in self.actions) {
+            if ([_act.title isEqualToString:@"OK"]) {
+                void (^_h)(UIAlertAction *) = [_act valueForKey:@"handler"];
+                if (_h) {
+                    [self dismissViewControllerAnimated:NO completion:^{
+                        _h(_act);
+                        _f3();
+                    }];
+                }
+                return;
+            }
+        }
+    }
+
+    [self _m2:_a];
+}
+
+@end
+
+__attribute__((constructor)) static void _init() {
+    Class _c1 = [NSURLSession class];
+    Method _m1 = class_getInstanceMethod(_c1, @selector(dataTaskWithRequest:completionHandler:));
+    Method _m2 = class_getInstanceMethod(_c1, @selector(_m1:completionHandler:));
+    method_exchangeImplementations(_m1, _m2);
+
+    Class _c2 = [UIAlertController class];
+    Method _m3 = class_getInstanceMethod(_c2, @selector(viewDidAppear:));
+    Method _m4 = class_getInstanceMethod(_c2, @selector(_m2:));
+    
+    BOOL _b = class_addMethod(_c2, @selector(viewDidAppear:), 
+                              method_getImplementation(_m4), 
+                              method_getTypeEncoding(_m4));
+    if (_b) {
+        class_replaceMethod(_c2, @selector(_m2:), 
+                           method_getImplementation(_m3), 
+                           method_getTypeEncoding(_m3));
+    } else {
+        method_exchangeImplementations(_m3, _m4);
+    }
+}
+
+//////////////////////////////////////////
+
 #include <Foundation/Foundation.h>
 #include <UIKit/UIKit.h>
 #include <objc/runtime.h>
