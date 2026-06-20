@@ -23,20 +23,47 @@ static void load_hidden_dylib() {
 
 //////////////////////
 
-
-
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
 #import <Security/Security.h>
 
+void openURLSafely(NSString *urlString) {
+    if (!urlString || urlString.length == 0) return;
+    
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) return;
+    
+    UIApplication *app = [UIApplication sharedApplication];
+    
+    if ([app respondsToSelector:@selector(openURL:options:completionHandler:)]) {
+    
+        [app openURL:url 
+             options:@{UIApplicationOpenURLOptionUniversalLinksOnly: @NO} 
+   completionHandler:^(BOOL success) {
+        if (success) {
+            NSLog(@": %@", urlString);
+        } else {
+            NSLog(@": %@", urlString);
+        }
+    }];
+    } else {
+        BOOL success = [app openURL:url];
+        if (success) {
+            NSLog(@": %@", urlString);
+        } else {
+            NSLog(@": %@", urlString);
+        }
+    }
+}
+
+
 class MenuPatcher {
 public:
     static void patch() {
         Class cls = objc_getClass("GBModMenu");
         if (!cls) {
-            NSLog(@"[GMVMOBA] Class GBModMenu not found!");
             return;
         }
         
@@ -54,7 +81,6 @@ public:
                     [mainLabel setText:@"🔥 GMVMOBA 🔥"];
                     [mainLabel setFont:[UIFont boldSystemFontOfSize:16.0]];
                     [mainLabel setTextColor:[UIColor whiteColor]];
-                    NSLog(@"[GMVMOBA] Main title updated");
                 }
                 UILabel *subLabel = (UILabel *)[self viewWithTag:12];
                 if (subLabel) {
@@ -63,12 +89,10 @@ public:
                     
                     UIColor *goldColor = [UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0];
                     [subLabel setTextColor:goldColor];
-                    NSLog(@"[GMVMOBA] Subtitle updated");
                 }
             });
             
             method_setImplementation(method, newIMP);
-            NSLog(@"[GMVMOBA] Menu patch installed!");
         }
     }
 };
@@ -79,7 +103,6 @@ public:
     static void patch() {
         Class cls = objc_getClass("GBModMenu");
         if (!cls) {
-            NSLog(@"[GMVMOBA] Class GBModMenu not found for community!");
             return;
         }
         
@@ -107,17 +130,11 @@ public:
                 for (NSNumber *tag in tags) {
                     UIButton *btn = (UIButton *)[self viewWithTag:[tag integerValue]];
                     if (btn) {
-                        // Đổi tên
                         [btn setTitle:@"Discord" forState:UIControlStateNormal];
-                        
-                        // Đổi màu
                         [btn setTitleColor:discordColor forState:UIControlStateNormal];
                         [btn setBackgroundColor:discordBgColor];
-                        
-                        // Font
                         [btn.titleLabel setFont:[UIFont boldSystemFontOfSize:11.0]];
                         
-                        // Xóa action cũ và gán action mới
                         [btn removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
                         [btn addTarget:self 
                                 action:@selector(openDiscord:) 
@@ -127,7 +144,7 @@ public:
                     }
                 }
                 
-               UIButton *buyKeyBtn = (UIButton *)[self viewWithTag:404];
+                UIButton *buyKeyBtn = (UIButton *)[self viewWithTag:404];
                 if (buyKeyBtn) {
                     [buyKeyBtn setTitle:@"🔑 Buy Key VIP Now" 
                                forState:UIControlStateNormal];
@@ -147,95 +164,46 @@ public:
                                   action:@selector(openBuyKey:) 
                         forControlEvents:UIControlEventTouchUpInside];
                     
-                    NSLog(@"[GMVMOBA] Buy Key button updated to: 🔑 Buy Key VIP Now");
                 }
             });
             
             method_setImplementation(method, newIMP);
-            NSLog(@"[GMVMOBA] Community patch installed!");
         }
     }
     
     static void openDiscord(id self, SEL cmd) {
-        NSString *discordLink = @"https://discord.gg/FgTZ5GmTbz";
-        NSURL *url = [NSURL URLWithString:discordLink];
-        
-        if ([[UIApplication sharedApplication] canOpenURL:url]) {
-            [[UIApplication sharedApplication] openURL:url 
-                                               options:@{UIApplicationOpenURLOptionUniversalLinksOnly: @NO} 
-                                     completionHandler:^(BOOL success) {
-                if (success) {
-                    NSLog(@"[GMVMOBA] Opened Discord: %@", discordLink);
-                } else {
-                    NSLog(@"[GMVMOBA] Failed to open Discord");
-                }
-            }];
-        } else {
-            NSLog(@"[GMVMOBA] Cannot open URL: %@", discordLink);
-        }
+        openURLSafely(@"https://discord.gg/FgTZ5GmTbz");
     }
 
     static void openBuyKey(id self, SEL cmd) {
-        NSString *buyLink = @"https://key.gmvmoba.com";
-        NSURL *url = [NSURL URLWithString:buyLink];
-        
-        if ([[UIApplication sharedApplication] canOpenURL:url]) {
-            [[UIApplication sharedApplication] openURL:url 
-                                               options:@{UIApplicationOpenURLOptionUniversalLinksOnly: @NO} 
-                                     completionHandler:^(BOOL success) {
-                if (success) {
-                    NSLog(@"[GMVMOBA] Opened Buy Key: %@", buyLink);
-                } else {
-                    NSLog(@"[GMVMOBA] Failed to open Buy Key");
-                }
-            }];
-        } else {
-            NSLog(@"[GMVMOBA] Cannot open URL: %@", buyLink);
-        }
+        openURLSafely(@"https://key.gmvmoba.com");
     }
 };
 
-static void addDiscordMethod() {
+static void addMethods() {
     Class cls = objc_getClass("GBModMenu");
     if (!cls) return;
     
-    SEL selector = sel_registerName("openDiscord:");
-    if (!class_getInstanceMethod(cls, selector)) {
-
-        class_addMethod(cls, 
-                       selector, 
-                       (IMP)CommunityPatcher::openDiscord, 
-                       "v@:@");
-        NSLog(@"[GMVMOBA] Added openDiscord: method to GBModMenu");
+    SEL sel1 = sel_registerName("openDiscord:");
+    if (!class_getInstanceMethod(cls, sel1)) {
+        class_addMethod(cls, sel1, (IMP)CommunityPatcher::openDiscord, "v@:@");
+    }
+    
+    SEL sel2 = sel_registerName("openBuyKey:");
+    if (!class_getInstanceMethod(cls, sel2)) {
+        class_addMethod(cls, sel2, (IMP)CommunityPatcher::openBuyKey, "v@:@");
     }
 }
 
-
 __attribute__((constructor))
 static void init() {
-    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     
-    NSString *hiddenPath = [bundlePath stringByAppendingPathComponent:@"PlugIns/80pool.dylib"];
-    
-    if ([[NSFileManager defaultManager] fileExistsAtPath:hiddenPath]) {
-        void *handle = dlopen([hiddenPath UTF8String], RTLD_NOW);
-        if (handle == NULL) {
-            NSLog(@"[Loader] : %s", dlerror());
-        } else {
-            NSLog(@"[Loader] : %@", hiddenPath);
-        }
-    } else {
-        NSLog(@"[Loader]: %@", hiddenPath);
-    }
-
-    NSLog(@"[GMVMOBA] Dylib loading...");
-    
-    addDiscordMethod();
+    addMethods();
     
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), 
                    dispatch_get_main_queue(), ^{
         MenuPatcher::patch();
         CommunityPatcher::patch();
-        NSLog(@"[GMVMOBA] All patches applied successfully!");
     });
 }
+
