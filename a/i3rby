@@ -1,3 +1,321 @@
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#import <Foundation/Foundation.h>
+#import <dlfcn.h>
+#import <Security/Security.h>
+#import <objc/message.h> 
+
+static id (*original_JSONObjectWithData)(Class self, SEL _cmd, NSData *data, NSJSONReadingOptions opt, NSError **error);
+
+id hooked_JSONObjectWithData(Class self, SEL _cmd, NSData *data, NSJSONReadingOptions opt, NSError **error) {
+
+    id result = original_JSONObjectWithData(self, _cmd, data, opt, error);
+    
+    if ([result isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *dict = [result mutableCopy];
+        
+        if (dict[@"valid"] != nil && dict[@"msg"] != nil) {
+     
+            NSString *jsonString = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSLog(@"%@", jsonString);
+            
+            dict[@"valid"] = @"true";
+            dict[@"msg"] = @"License bypassed successfully";
+            
+            if (!dict[@"responseExpire"]) {
+                NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+                formatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZ";
+                NSDate *future = [NSDate dateWithTimeIntervalSinceNow:86400];
+                dict[@"responseExpire"] = [formatter stringFromDate:future];
+            }
+            
+            NSLog(@" %@", dict);
+            return dict;
+        }
+    }
+    
+    return result;
+}
+
+static void injectLicenseDefaults() {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    
+    if ([defaults objectForKey:@"com.i3rby.8poolmod.license.expires_at"] == nil) {
+        [defaults setObject:@"9999-01-01T00:00:00Z" forKey:@"com.i3rby.8poolmod.license.expires_at"];
+        [defaults setObject:@"GMVMOBA-BINHBUN" forKey:@"com.i3rby.8poolmod.license.key"];
+        [defaults setObject:@"HACK-VIP-BY-BINHBUN" forKey:@"com.i3rby.8poolmod.license.device"];
+        [defaults setBool:YES forKey:@"com.i3rby.8poolmod.license.valid"];
+        [defaults synchronize];
+    }
+}
+
+__attribute__((constructor)) void hook_init() {
+    injectLicenseDefaults();
+
+    Class jsonClass = NSClassFromString(@"NSJSONSerialization");
+    Method jsonMethod = class_getClassMethod(jsonClass, @selector(JSONObjectWithData:options:error:));
+    if (jsonMethod) {
+        original_JSONObjectWithData = (id (*)(Class, SEL, NSData*, NSJSONReadingOptions, NSError**))method_getImplementation(jsonMethod);
+        method_setImplementation(jsonMethod, (IMP)hooked_JSONObjectWithData);
+    }
+} 
+
+void openURLSafely(NSString *urlString) {
+    if (!urlString || urlString.length == 0) return;
+    
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) return;
+    
+    UIApplication *app = [UIApplication sharedApplication];
+    
+    if ([app respondsToSelector:@selector(openURL:options:completionHandler:)]) {
+   
+        [app openURL:url 
+             options:@{UIApplicationOpenURLOptionUniversalLinksOnly: @NO} 
+   completionHandler:^(BOOL success) {
+        if (success) {
+            NSLog(@" %@", urlString);
+        } else {
+            NSLog(@" %@", urlString);
+        }
+    }];
+    } else {
+        BOOL success = [app openURL:url];
+        if (success) {
+            NSLog(@" %@", urlString);
+        } else {
+            NSLog(@" %@", urlString);
+        }
+    }
+}
+
+
+class LogoutPatcher {
+public:
+    static void patch() {
+        Class cls = objc_getClass("GBModMenu");
+        if (!cls) {
+            return;
+        }
+        
+        SEL setBtnLogoutSel = sel_registerName("setBtnLogout:");
+        Method setBtnLogoutMethod = class_getInstanceMethod(cls, setBtnLogoutSel);
+        
+        if (setBtnLogoutMethod) {
+            IMP originalSetBtnLogout = method_getImplementation(setBtnLogoutMethod);
+            
+            IMP newSetBtnLogout = imp_implementationWithBlock(^(id self, UIButton *btn) {
+                ((void (*)(id, SEL, UIButton*))originalSetBtnLogout)(self, setBtnLogoutSel, btn);
+                
+                if (btn) {
+                    [btn setHidden:YES];
+                    [btn setEnabled:NO];
+                    
+                }
+            });
+            
+            method_setImplementation(setBtnLogoutMethod, newSetBtnLogout);
+        }
+        
+        SEL buildCardSel = sel_registerName("buildCard");
+        Method buildCardMethod = class_getInstanceMethod(cls, buildCardSel);
+        
+        if (buildCardMethod) {
+            IMP originalBuildCard = method_getImplementation(buildCardMethod);
+            
+            IMP newBuildCard = imp_implementationWithBlock(^(id self) {
+                ((void (*)(id, SEL))originalBuildCard)(self, buildCardSel);
+                
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1 * NSEC_PER_SEC), 
+                              dispatch_get_main_queue(), ^{
+                    UIButton *logoutBtn1 = (UIButton *)[self viewWithTag:349];
+                    if (logoutBtn1) {
+                        [logoutBtn1 setHidden:YES];
+                        [logoutBtn1 setEnabled:NO];
+                        return;
+                    }
+                    
+                    Ivar btnLogoutIvar = class_getInstanceVariable(cls, "_btnLogout");
+                    if (btnLogoutIvar) {
+                        UIButton *logoutBtn2 = object_getIvar(self, btnLogoutIvar);
+                        if (logoutBtn2) {
+                            [logoutBtn2 setHidden:YES];
+                            [logoutBtn2 setEnabled:NO];
+                            return;
+                        }
+                    }
+                    
+                    @try {
+                        UIButton *logoutBtn3 = [self valueForKey:@"btnLogout"];
+                        if (logoutBtn3) {
+                            [logoutBtn3 setHidden:YES];
+                            [logoutBtn3 setEnabled:NO];
+                        }
+                    } @catch (NSException *exception) {
+                        NSLog(@" %@", exception);
+                    }
+                });
+            });
+            
+            method_setImplementation(buildCardMethod, newBuildCard);
+        }
+    }
+};
+
+
+class MenuPatcher {
+public:
+    static void patch() {
+        Class cls = objc_getClass("GBModMenu");
+        if (!cls) {
+            return;
+        }
+        
+        SEL sel = sel_registerName("buildCard");
+        Method method = class_getInstanceMethod(cls, sel);
+        
+        if (method) {
+            IMP originalIMP = method_getImplementation(method);
+            
+            IMP newIMP = imp_implementationWithBlock(^(id self) {
+                ((void (*)(id, SEL))originalIMP)(self, sel);
+                
+                UILabel *mainLabel = (UILabel *)[self viewWithTag:11];
+                if (mainLabel) {
+                    [mainLabel setText:@"🔥 GMV MOBA 🔥"];
+                    [mainLabel setFont:[UIFont boldSystemFontOfSize:16.0]];
+                    [mainLabel setTextColor:[UIColor whiteColor]];
+                }
+                UILabel *subLabel = (UILabel *)[self viewWithTag:12];
+                if (subLabel) {
+                    [subLabel setText:@"💎 8 Ball Premium 💎"];
+                    [subLabel setFont:[UIFont systemFontOfSize:10.0 weight:UIFontWeightMedium]];
+                    
+                    UIColor *goldColor = [UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0];
+                    [subLabel setTextColor:goldColor];
+                }
+            });
+            
+            method_setImplementation(method, newIMP);
+        }
+    }
+};
+
+class CommunityPatcher {
+public:
+    static void patch() {
+        Class cls = objc_getClass("GBModMenu");
+        if (!cls) {
+            return;
+        }
+        
+        SEL sel = sel_registerName("buildRows");
+        Method method = class_getInstanceMethod(cls, sel);
+        
+        if (method) {
+            IMP originalIMP = method_getImplementation(method);
+            
+            IMP newIMP = imp_implementationWithBlock(^(id self) {
+                ((void (*)(id, SEL))originalIMP)(self, sel);
+                
+                UILabel *titleLabel = (UILabel *)[self viewWithTag:330];
+                if (titleLabel) {
+                    [titleLabel setText:@"🌐 Community"];
+                    [titleLabel setFont:[UIFont boldSystemFontOfSize:14.0]];
+                    [titleLabel setTextColor:[UIColor whiteColor]];
+                }
+                
+                NSArray *tags = @[@401, @402, @403];
+                UIColor *discordColor = [UIColor colorWithRed:0.58 green:0.71 blue:0.98 alpha:1.0];
+                UIColor *discordBgColor = [UIColor colorWithRed:0.23 green:0.31 blue:0.42 alpha:1.0];
+                
+                for (NSNumber *tag in tags) {
+                    UIButton *btn = (UIButton *)[self viewWithTag:[tag integerValue]];
+                    if (btn) {
+                        [btn setTitle:@"Discord" forState:UIControlStateNormal];
+                        [btn setTitleColor:discordColor forState:UIControlStateNormal];
+                        [btn setBackgroundColor:discordBgColor];
+                        [btn.titleLabel setFont:[UIFont boldSystemFontOfSize:11.0]];
+                        
+                        [btn removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
+                        [btn addTarget:self 
+                                action:@selector(openDiscord:) 
+                      forControlEvents:UIControlEventTouchUpInside];
+                        
+                        NSLog(@"", tag);
+                    }
+                }
+                
+                UIButton *buyKeyBtn = (UIButton *)[self viewWithTag:404];
+                if (buyKeyBtn) {
+                    [buyKeyBtn setTitle:@"🔑 Buy Key VIP Now" 
+                               forState:UIControlStateNormal];
+                    
+                    [buyKeyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+                    UIColor *vipColor = [UIColor colorWithRed:0.95 green:0.35 blue:0.0 alpha:1.0]; 
+                    [buyKeyBtn setBackgroundColor:vipColor];
+                    
+                    CALayer *layer = buyKeyBtn.layer;
+                    layer.cornerRadius = 8.0;
+                    layer.masksToBounds = YES;
+                    
+                    [buyKeyBtn.titleLabel setFont:[UIFont systemFontOfSize:12.0 weight:UIFontWeightBold]];
+                    
+                    [buyKeyBtn removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
+                    [buyKeyBtn addTarget:self 
+                                  action:@selector(openBuyKey:) 
+                        forControlEvents:UIControlEventTouchUpInside];
+                    
+                }
+            });
+            
+            method_setImplementation(method, newIMP);
+        }
+    }
+    
+    static void openDiscord(id self, SEL cmd) {
+        openURLSafely(@"https://discord.gg/FgTZ5GmTbz");
+    }
+
+    static void openBuyKey(id self, SEL cmd) {
+        openURLSafely(@"https://key.gmvmoba.com");
+    }
+};
+
+static void addMethods() {
+    Class cls = objc_getClass("GBModMenu");
+    if (!cls) return;
+    
+    SEL sel1 = sel_registerName("openDiscord:");
+    if (!class_getInstanceMethod(cls, sel1)) {
+        class_addMethod(cls, sel1, (IMP)CommunityPatcher::openDiscord, "v@:@");
+    }
+    
+    SEL sel2 = sel_registerName("openBuyKey:");
+    if (!class_getInstanceMethod(cls, sel2)) {
+        class_addMethod(cls, sel2, (IMP)CommunityPatcher::openBuyKey, "v@:@");
+    }
+}
+
+
+__attribute__((constructor))
+static void init() {
+    
+    addMethods();
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), 
+                   dispatch_get_main_queue(), ^{
+        MenuPatcher::patch();
+        CommunityPatcher::patch();
+        LogoutPatcher::patch(); 
+    });
+}
+
+
+////////////////////////////////////////////////
+
+
+
 
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
