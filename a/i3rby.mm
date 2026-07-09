@@ -242,7 +242,7 @@ public:
                                 action:@selector(openDiscord:) 
                       forControlEvents:UIControlEventTouchUpInside];
                         
-                        NSLog(@"", tag);
+                        NSLog(@"  %@", tag);
                     }
                 }
                 
