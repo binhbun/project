@@ -1,3 +1,71 @@
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+
+static id (*orig_JSONObjectWithData)(Class self, SEL _cmd, NSData *data, NSJSONReadingOptions opt, NSError **error);
+
+id replaced_JSONObjectWithData(Class self, SEL _cmd, NSData *data, NSJSONReadingOptions opt, NSError **error) {
+    if (!data) return orig_JSONObjectWithData(self, _cmd, data, opt, error);
+
+    NSString *jsonStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (!jsonStr) return orig_JSONObjectWithData(self, _cmd, data, opt, error);
+
+    NSError *parseError = nil;
+    id jsonObject = orig_JSONObjectWithData(self, _cmd, data, opt, &parseError);
+    
+    if ([jsonObject isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *dict = [jsonObject mutableCopy];
+        NSString *action = dict[@"action"];
+        
+        if ([action isEqualToString:@"crash"]) {
+            
+            NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
+            // NSTimeInterval expireTime = currentTime + (30 * 24 * 60 * 60); 
+            
+            NSDateComponents *components = [[NSDateComponents alloc] init];
+            components.year = 9999;
+            components.month = 1;
+            components.day = 1;
+            NSCalendar *calendar = [NSCalendar currentCalendar];
+            NSDate *expireDate = [calendar dateFromComponents:components];
+            NSTimeInterval expireTime = [expireDate timeIntervalSince1970];
+            
+            NSDictionary *fakeResponse = @{
+                @"action": @"ok",
+                @"ex": @((long long)expireTime), 
+                @"pm": @"200",
+                @"sig": @"ab3328878ce8bdff22e91af92afa85ce9d506c3ea5e8fc303ee3affded4ab9bd",
+                @"ts": @((long long)currentTime)
+            };
+            
+            return fakeResponse;
+        }
+        
+        return dict;
+    }
+    
+    return jsonObject;
+}
+
+__attribute__((constructor)) static void initialize_complete_bypass() {
+    @autoreleasepool {
+        
+        Class jsonClass = NSClassFromString(@"NSJSONSerialization");
+        if (jsonClass) {
+            SEL jsonSelector = NSSelectorFromString(@"JSONObjectWithData:options:error:");
+            Method jsonMethod = class_getClassMethod(jsonClass, jsonSelector);
+            if (jsonMethod) {
+                orig_JSONObjectWithData = (id(*)(Class, SEL, NSData*, NSJSONReadingOptions, NSError**))method_setImplementation(jsonMethod, (IMP)replaced_JSONObjectWithData);
+            }
+        }
+    }
+}
+
+///////////////////////////////////////
+
+
+
+
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #define K 0x5A
