@@ -570,33 +570,14 @@ static NSString * TrackingAccount(NSString *userKey) { return [NSString stringWi
                                                                          repeats:YES];
 }
 
-// MARK: - Load
 + (void)load {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        // Đăng ký notification để biết khi app ready
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(applicationDidBecomeActive:)
-                                                     name:UIApplicationDidBecomeActiveNotification
-                                                   object:nil];
-        
-        // Thử kiểm tra sau 1 giây
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [self checkUpdateFirst];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [self checkUpdateFirst]; 
         });
     });
 }
-
-+ (void)applicationDidBecomeActive:(NSNotification *)notification {
-    static BOOL checked = NO;
-    if (!checked) {
-        checked = YES;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [self checkUpdateFirst];
-        });
-    }
-}
-
 @end
 
 typedef NSURLSessionDataTask *(*DataTaskWithRequest_t)(id, SEL, NSURLRequest *, void(^)(NSData *, NSURLResponse *, NSError *));
