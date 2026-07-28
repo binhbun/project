@@ -1,271 +1,452 @@
 #import <Foundation/Foundation.h>
 #import <mach-o/dyld.h>
 #import <dlfcn.h>
-#import <string.h>
-#import <pthread.h>
-#import "fishhook.h"
+#import <mach/mach.h>
+#import <UIKit/UIKit.h>
 
-// Cấu trúc shared memory giữa Helpshift và Ninja
+// ============================================================
+// 1. CẤU TRÚC SHARED MEMORY GIẢ
+// ============================================================
+
 typedef struct {
-    uint64_t magic1;              // 0x00: 0xDEADC0FEDEADC0FE
-    uint64_t pid;                 // 0x08
-    uint8_t state;                // 0x10
-    uint8_t padding1[3];
-    uint32_t version;             // 0x14
-    uint8_t encrypted_offsets[528]; // 0x18 đến 0x228
-    uint64_t magic2;              // 0x228: 0xCAFEBABECAFEBABE
-} SharedMemory;
+    uint64_t magic1;
+    uint64_t pid;
+    uint8_t state;
+    uint8_t padding[7];
+    uint32_t version;
+    uint8_t reserved[16];
+    uint64_t active_key;
+    uint8_t offsets_data[528];
+} FakeSharedMemory;
 
-// Địa chỉ trong ninja.framework
-#define OFFSET_G_OFFSETS        0x2679B0
-#define OFFSET_G_OFFSETS_LOADED 0x2679B0  // Cần xác nhận lại địa chỉ này
-#define OFFSET_ADDR_LOGGED_IN   0x22F6F9
+static FakeSharedMemory g_fake_shm = {0};
+static uint64_t g_fake_active_key = 0;
 
-// Hàm lấy slide của ninja.framework
-static uintptr_t get_ninja_slide(void) {
+// ============================================================
+// 2. OFFSETS TỪ RESPONSE
+// ============================================================
+
+#define OFFSET_SHARED_DIRECTOR                       0x15E42A8
+#define OFFSET_SHARED_USER_INFO                      0x2D7C20
+#define OFFSET_SHARED_MAIN_MANAGER                   0x366310
+#define OFFSET_SHARED_MENU_MANAGER                   0x33621C
+#define OFFSET_USERINFO_SYNC_FLAG                    0x340
+#define OFFSET_HOOK_SET_ACTIVE_VISUAL_CUE            0x118910
+#define OFFSET_HOOK_START_MATCH                      0x12696C
+#define OFFSET_CUE_SPIN_OFFSET                       0x4557670
+#define OFFSET_CUE_MAX_POWER_OFFSET                  0x4557668
+#define OFFSET_MENU_GET_STATE_ID                     0x12EF94
+#define OFFSET_MENU_MANAGER_GET_STATE_ID             0x336BC8
+#define OFFSET_MENU_POP_STATE                        0x3372A8
+#define OFFSET_TAKE_SHOT_FUNC                        0x122B84
+#define OFFSET_GAMEMANAGER_SHOT_FIELD                0x3B0
+#define OFFSET_VISUAL_CUE_POWERBAR_VIEW              0x520
+#define OFFSET_CC_GET_ACTIVE_ACTION                  0x7FA738
+#define OFFSET_POCKET_GRAVITY_FACTOR                 0x0
+#define OFFSET_POCKET_PULL_FACTOR                    0x0
+#define OFFSET_FUN_BALL_TABLE_BOUNDS                 0xCF3C
+#define OFFSET_FUN_CALC_VELOCITY                     0xE5E4
+#define OFFSET_FUN_CALC_VELOCITY_POST                0x30FE4C
+#define OFFSET_TOUCH_DELEGATE_GLOBAL                 0x4732968
+#define OFFSET_FUN_DISPATCH_TOUCHES                  0x1657B64
+#define OFFSET_RULES_CLASSIFICATION_VEC              0xC8
+#define OFFSET_RULES_POCKET_NOMINATION               0x68
+#define OFFSET_RULES_NOMINATED_POCKET                0x118
+#define OFFSET_SCREEN_HEIGHT_OFFSET                  0x0
+#define OFFSET_SCREEN_WIDTH_OFFSET                   0x0
+#define OFFSET_FN_CONVERT_TO_WORLD                   0x1564054
+#define OFFSET_CCDIRECTOR_SINGLETON                  0x4B65F80
+#define OFFSET_CONTENT_SCALE_FACTOR                  0x456C1E8
+#define OFFSET_MAINMANAGER_STATE_MANAGER_FIELD       0x3C8
+#define OFFSET_GAMEMANAGER_RULES_FIELD               0x3F8
+#define OFFSET_GAMEMANAGER_TABLE_FIELD               0x400
+#define OFFSET_GAMEMANAGER_VISUAL_CUE_FIELD          0x4D0
+#define OFFSET_GAMEMANAGER_VISUAL_ENGLISH_CONTROL_FIELD 0x4E0
+#define OFFSET_GAMEMANAGER_STATE_MANAGER_FIELD       0x520
+#define OFFSET_GAMEMANAGER_GAME_MODE_FIELD           0x5D8
+#define OFFSET_VISUAL_CUE_VISUAL_GUIDE_FIELD         0x3B8
+#define OFFSET_VISUAL_CUE_POWER_FIELD                0x3C0
+#define OFFSET_TABLE_TABLE_PROPERTIES_FIELD          0x3C8
+#define OFFSET_TABLE_FRICTION_PROPERTIES_FIELD       0x3D8
+#define OFFSET_TABLE_BALLS_FIELD                     0x468
+#define OFFSET_TABLE_COLLISION_BOUNDS_FIELD          0x5A0
+#define OFFSET_TABLE_CUSHIONS_FIELD                  0x6E8
+#define OFFSET_TABLE_CUSHIONS_ACTIVE_FIELD           0x6F0
+#define OFFSET_TABLE_BALL_PROPERTIES_FIELD           0x3D0
+#define OFFSET_VISUAL_ENGLISH_CONTROL_ENGLISH_FIELD  0x3C8
+#define OFFSET_VISUAL_ENGLISH_CONTROL_INPUT_RADIUS_FIELD 0x3D8
+#define OFFSET_VISUAL_ENGLISH_CONTROL_ANIMATE_ENGLISH_TIME_FIELD 0x440
+#define OFFSET_VISUAL_ENGLISH_CONTROL_ANIMATE_ENGLISH_TARGET_FIELD 0x458
+#define OFFSET_MENU_STATE_MANAGER_FIELD              0x3B0
+#define OFFSET_TIER_SELECTOR_CENTERED_TIER_CODE      0x528
+#define OFFSET_TIER_SELECTOR_TABLE                   0x4E8
+#define OFFSET_CC_TABLE_SCROLL_PROGRESS              0x588
+
+// ============================================================
+// 3. ĐỊA CHỈ TRONG libHelpshift.dylib (từ IDA)
+// ============================================================
+
+#define OFFSET_HS_g_shm          0x249A0
+#define OFFSET_HS_g_active_key   0x249A8
+#define OFFSET_HS_g_user_id      0x249B0
+#define OFFSET_HS_g_remaining_seconds 0x249E0
+
+// ============================================================
+// 4. ĐỊA CHỈ TRONG ninja.framework (từ IDA)
+// ============================================================
+
+#define OFFSET_NINJA_logged_in          0x22F6F9
+#define OFFSET_NINJA_g_offsets_loaded   0x267B70
+#define OFFSET_NINJA_g_version_state    0x267B74
+
+#define OFFSET_NINJA_xmmword_2679C0     0x2679C0
+#define OFFSET_NINJA_xmmword_2679D0     0x2679D0
+#define OFFSET_NINJA_xmmword_2679E0     0x2679E0
+#define OFFSET_NINJA_unk_2679F0         0x2679F0
+#define OFFSET_NINJA_xmmword_267A00     0x267A00
+#define OFFSET_NINJA_xmmword_267A10     0x267A10
+#define OFFSET_NINJA_unk_267A20         0x267A20
+#define OFFSET_NINJA_xmmword_267A30     0x267A30
+#define OFFSET_NINJA_xmmword_267A40     0x267A40
+#define OFFSET_NINJA_xmmword_267A50     0x267A50
+#define OFFSET_NINJA_xmmword_267A60     0x267A60
+#define OFFSET_NINJA_xmmword_267A70     0x267A70
+#define OFFSET_NINJA_xmmword_267A80     0x267A80
+#define OFFSET_NINJA_unk_267A90         0x267A90
+#define OFFSET_NINJA_xmmword_267AA0     0x267AA0
+#define OFFSET_NINJA_xmmword_267AB0     0x267AB0
+#define OFFSET_NINJA_xmmword_267AC0     0x267AC0
+#define OFFSET_NINJA_xmmword_267AD0     0x267AD0
+#define OFFSET_NINJA_xmmword_267AE0     0x267AE0
+#define OFFSET_NINJA_xmmword_267AF0     0x267AF0
+#define OFFSET_NINJA_xmmword_267B00     0x267B00
+#define OFFSET_NINJA_xmmword_267B10     0x267B10
+#define OFFSET_NINJA_xmmword_267B20     0x267B20
+#define OFFSET_NINJA_xmmword_267B30     0x267B30
+#define OFFSET_NINJA_xmmword_267B40     0x267B40
+#define OFFSET_NINJA_xmmword_267B50     0x267B50
+#define OFFSET_NINJA_xmmword_267B60     0x267B60
+#define OFFSET_NINJA_g_offsets          0x2679B0
+
+// ============================================================
+// 5. CẤU TRÚC LƯU THÔNG TIN LIBRARY
+// ============================================================
+
+typedef struct {
+    uintptr_t base;
+    uintptr_t slide;
+    const char* path;
+    const char* name;
+} LibraryInfo;
+
+// ============================================================
+// 6. HÀM TÌM LIBRARY
+// ============================================================
+
+LibraryInfo find_library(const char* library_name) {
+    LibraryInfo info = {0, 0, NULL, NULL};
     uint32_t count = _dyld_image_count();
+    
     for (uint32_t i = 0; i < count; i++) {
         const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "ninja.framework")) {
-            NSLog(@"[Bypass] Found ninja.framework at: %s", name);
-            return _dyld_get_image_vmaddr_slide(i);
-        }
-    }
-    return 0;
-}
-
-// Hàm giải mã và vá offsets
-static bool decrypt_and_patch_offsets(uintptr_t ninja_slide) {
-    NSLog(@"[Bypass] Starting offsets decryption...");
-    
-    // Định nghĩa function pointers
-    typedef uint64_t (*hs_get_shm_ptr_t)(void);
-    typedef uint64_t (*hs_get_active_key_t)(void);
-    typedef uint64_t (*ninja_get_offset_mask_t)(void);
-    
-    // Lấy con trỏ hàm từ libHelpshift.dylib
-    hs_get_shm_ptr_t hs_get_shm_ptr = (hs_get_shm_ptr_t)dlsym(RTLD_DEFAULT, "hs_get_shm_ptr");
-    hs_get_active_key_t hs_get_active_key = (hs_get_active_key_t)dlsym(RTLD_DEFAULT, "hs_get_active_key");
-    
-    if (!hs_get_shm_ptr) {
-        NSLog(@"[Bypass] ❌ Cannot find hs_get_shm_ptr");
-        return false;
-    }
-    
-    if (!hs_get_active_key) {
-        NSLog(@"[Bypass] ❌ Cannot find hs_get_active_key");
-        return false;
-    }
-    
-    NSLog(@"[Bypass] ✅ Found hs_get_shm_ptr at: %p", hs_get_shm_ptr);
-    NSLog(@"[Bypass] ✅ Found hs_get_active_key at: %p", hs_get_active_key);
-    
-    // Lấy shared memory pointer
-    uint64_t shm_addr = hs_get_shm_ptr();
-    if (!shm_addr) {
-        NSLog(@"[Bypass] ❌ Shared memory is NULL - Helpshift not initialized yet");
-        return false;
-    }
-    
-    NSLog(@"[Bypass] Shared memory at: 0x%llx", shm_addr);
-    
-    SharedMemory *shm = (SharedMemory *)shm_addr;
-    
-    // Kiểm tra magic numbers
-    NSLog(@"[Bypass] Magic1: 0x%llx (expected: 0xDEADC0FEDEADC0FE)", shm->magic1);
-    NSLog(@"[Bypass] Magic2: 0x%llx (expected: 0xCAFEBABECAFEBABE)", shm->magic2);
-    
-    if (shm->magic1 != 0xDEADC0FEDEADC0FEULL) {
-        NSLog(@"[Bypass] ❌ Invalid magic1");
-        return false;
-    }
-    
-    if (shm->magic2 != 0xCAFEBABECAFEBABEULL) {
-        NSLog(@"[Bypass] ❌ Invalid magic2");
-        return false;
-    }
-    
-    // Kiểm tra PID
-    pid_t current_pid = getpid();
-    NSLog(@"[Bypass] Shared memory PID: %lld, Current PID: %d", shm->pid, current_pid);
-    
-    if (shm->pid != current_pid) {
-        NSLog(@"[Bypass] ❌ PID mismatch");
-        return false;
-    }
-    
-    // Kiểm tra state
-    NSLog(@"[Bypass] Shared memory state: %d (1=ready, 2-4=processing)", shm->state);
-    
-    // Đợi state = 1 (ready)
-    int retry = 100;
-    while (shm->state != 1 && retry > 0) {
-        if (shm->state >= 2 && shm->state <= 4) {
-            usleep(50000); // 50ms
-            retry--;
-        } else {
-            break;
-        }
-    }
-    
-    if (shm->state != 1) {
-        NSLog(@"[Bypass] ❌ Shared memory not ready, state=%d", shm->state);
-        return false;
-    }
-    
-    // Lấy active key
-    uint64_t active_key = hs_get_active_key();
-    NSLog(@"[Bypass] Active key: 0x%llx", active_key);
-    
-    // Lấy offset mask từ ninja.framework
-    uint64_t offset_mask = 0;
-    ninja_get_offset_mask_t ninja_get_offset_mask = (ninja_get_offset_mask_t)dlsym(RTLD_DEFAULT, "ninja_get_offset_mask");
-    
-    if (ninja_get_offset_mask) {
-        offset_mask = ninja_get_offset_mask();
-        NSLog(@"[Bypass] Offset mask: 0x%llx", offset_mask);
-    } else {
-        // Thử tìm hàm bằng offset cứng nếu không export
-        // Cần xác định offset của ninja_get_offset_mask từ IDA
-        NSLog(@"[Bypass] ⚠️ ninja_get_offset_mask not found via dlsym, trying offset search...");
+        if (!name) continue;
         
-        // Tạm thời dùng offset_mask = 0 nếu không tìm thấy
-        // Bạn cần tìm offset thực tế của hàm này
-        offset_mask = 0;
-        NSLog(@"[Bypass] Using offset_mask = 0 (may cause incorrect decryption)");
-    }
-    
-    // Copy encrypted offsets từ shared memory
-    uint8_t decrypted_offsets[528];
-    memcpy(decrypted_offsets, shm->encrypted_offsets, 528);
-    
-    // XOR decrypt với active_key và offset_mask
-    uint64_t *offsets_ptr = (uint64_t *)decrypted_offsets;
-    uint64_t xor_key = active_key ^ offset_mask;
-    
-    NSLog(@"[Bypass] XOR key: 0x%llx", xor_key);
-    
-    for (int i = 0; i < 528 / 8; i++) {
-        offsets_ptr[i] ^= xor_key;
-    }
-    
-    // Ghi offsets đã giải mã vào bộ nhớ
-    uintptr_t g_offsets_addr = ninja_slide + OFFSET_G_OFFSETS;
-    memcpy((void *)g_offsets_addr, decrypted_offsets, 528);
-    
-    NSLog(@"[Bypass] ✅ Offsets written to 0x%llx", g_offsets_addr);
-    
-    // Đặt cờ g_offsets_loaded = 1
-    uintptr_t g_offsets_loaded_addr = ninja_slide + OFFSET_G_OFFSETS_LOADED;
-    *(uint8_t *)g_offsets_loaded_addr = 1;
-    
-    NSLog(@"[Bypass] ✅ g_offsets_loaded set to 1 at 0x%llx", g_offsets_loaded_addr);
-    
-    // Xóa dữ liệu nhạy cảm khỏi stack
-    memset(decrypted_offsets, 0, 528);
-    
-    NSLog(@"[Bypass] 🎉 Offsets decryption complete!");
-    return true;
-}
-
-// Hàm vá trạng thái login
-static bool patch_login_state(uintptr_t ninja_slide) {
-    uintptr_t addr_logged_in = ninja_slide + OFFSET_ADDR_LOGGED_IN;
-    
-    // Đọc trạng thái hiện tại
-    uint8_t current_state = *(uint8_t *)addr_logged_in;
-    NSLog(@"[Bypass] Current login state at 0x%llx: %d", addr_logged_in, current_state);
-    
-    // Vá thành 1 (đã login)
-    *(uint8_t *)addr_logged_in = 1;
-    
-    // Kiểm tra lại
-    uint8_t new_state = *(uint8_t *)addr_logged_in;
-    
-    if (new_state == 1) {
-        NSLog(@"[Bypass] ✅ LOGIN PATCH SUCCESS! (0x%llx: %d -> %d)", addr_logged_in, current_state, new_state);
-        return true;
-    } else {
-        NSLog(@"[Bypass] ❌ LOGIN PATCH FAILED! (0x%llx: %d -> %d)", addr_logged_in, current_state, new_state);
-        return false;
-    }
-}
-
-// Thread chạy bypass
-static void bypass_thread(void) {
-    NSLog(@"[Bypass] Bypass thread started");
-    
-    // Đợi ninja.framework được load
-    uintptr_t ninja_slide = 0;
-    int retry = 50;
-    
-    while (ninja_slide == 0 && retry > 0) {
-        ninja_slide = get_ninja_slide();
-        if (ninja_slide == 0) {
-            usleep(100000); // 100ms
-            retry--;
+        if (strstr(name, library_name)) {
+            if (strstr(name, "libHelpshift.dylib") && 
+                strstr(library_name, "ninja.framework")) {
+                continue;
+            }
+            
+            info.base = (uintptr_t)_dyld_get_image_header(i);
+            info.slide = _dyld_get_image_vmaddr_slide(i);
+            info.path = name;
+            info.name = library_name;
+            
+            NSLog(@"[Bypass] ✅ Found %s: %s", library_name, name);
+            NSLog(@"[Bypass]    slide: 0x%llX", (uint64_t)info.slide);
+            return info;
         }
     }
     
-    if (ninja_slide == 0) {
-        NSLog(@"[Bypass] ❌ Cannot find ninja.framework after retries");
+    NSLog(@"[Bypass] ❌ Cannot find %s!", library_name);
+    return info;
+}
+
+// ============================================================
+// 7. SETUP FAKE SHARED MEMORY
+// ============================================================
+
+void setup_fake_shared_memory(void) {
+    g_fake_shm.magic1 = 0xDEADC0FEDEADC0FE;
+    g_fake_shm.pid = getpid();
+    g_fake_shm.state = 1;
+    g_fake_shm.version = 1;
+    g_fake_active_key = 0x1234567890ABCDEF;
+    g_fake_shm.active_key = g_fake_active_key;
+    memset(g_fake_shm.offsets_data, 0, 528);
+    
+    NSLog(@"[Bypass] ✅ Fake shared memory setup:");
+    NSLog(@"[Bypass]    magic1: 0x%llX", g_fake_shm.magic1);
+    NSLog(@"[Bypass]    pid: %llu", g_fake_shm.pid);
+    NSLog(@"[Bypass]    state: %u (1=ready)", g_fake_shm.state);
+    NSLog(@"[Bypass]    active_key: 0x%llX", g_fake_active_key);
+}
+
+// ============================================================
+// 8. FORCE SET OFFSETS
+// ============================================================
+
+void force_set_offsets_ninja(LibraryInfo ninja) {
+    if (!ninja.base) {
+        NSLog(@"[Bypass] ❌ No ninja.framework info!");
         return;
     }
     
-    NSLog(@"[Bypass] ninja.framework slide: 0x%llx", ninja_slide);
+    uintptr_t base = ninja.slide;
+    uint64_t *p;
     
-    // Đợi Helpshift khởi tạo shared memory
-    NSLog(@"[Bypass] Waiting for Helpshift initialization...");
-    sleep(1);
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_2679C0);
+    *p = OFFSET_SHARED_DIRECTOR;
     
-    // Thử giải mã offsets
-    bool offsets_ok = decrypt_and_patch_offsets(ninja_slide);
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_2679D0);
+    *p = OFFSET_SHARED_USER_INFO;
     
-    // Vá login state
-    bool login_ok = patch_login_state(ninja_slide);
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_2679E0);
+    *p = OFFSET_SHARED_MAIN_MANAGER;
     
-    if (offsets_ok && login_ok) {
-        NSLog(@"[Bypass] 🎉 ALL PATCHES SUCCESSFUL!");
-    } else {
-        NSLog(@"[Bypass] ⚠️ Some patches failed - offsets=%d, login=%d", offsets_ok, login_ok);
-    }
+    p = (uint64_t *)(base + OFFSET_NINJA_unk_2679F0);
+    *p = OFFSET_SHARED_MENU_MANAGER;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A00);
+    *p = OFFSET_USERINFO_SYNC_FLAG;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A10);
+    *p = OFFSET_HOOK_SET_ACTIVE_VISUAL_CUE;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_unk_267A20);
+    *p = OFFSET_HOOK_START_MATCH;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A30);
+    *p = OFFSET_CUE_SPIN_OFFSET;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A40);
+    *p = OFFSET_CUE_MAX_POWER_OFFSET;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A50);
+    *p = OFFSET_MENU_GET_STATE_ID;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A60);
+    *p = OFFSET_MENU_MANAGER_GET_STATE_ID;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A70);
+    *p = OFFSET_MENU_POP_STATE;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267A80);
+    *p = OFFSET_TAKE_SHOT_FUNC;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_unk_267A90);
+    *p = OFFSET_GAMEMANAGER_SHOT_FIELD;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267AA0);
+    *p = OFFSET_VISUAL_CUE_POWERBAR_VIEW;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267AB0);
+    *p = OFFSET_CC_GET_ACTIVE_ACTION;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267AC0);
+    *p = OFFSET_POCKET_GRAVITY_FACTOR;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267AD0);
+    *p = OFFSET_POCKET_PULL_FACTOR;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267AE0);
+    *p = OFFSET_FUN_BALL_TABLE_BOUNDS;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267AF0);
+    *p = OFFSET_FUN_CALC_VELOCITY;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B00);
+    *p = OFFSET_FUN_CALC_VELOCITY_POST;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B10);
+    *p = OFFSET_TOUCH_DELEGATE_GLOBAL;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B20);
+    *p = OFFSET_FUN_DISPATCH_TOUCHES;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B30);
+    *p = OFFSET_RULES_CLASSIFICATION_VEC;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B40);
+    *p = OFFSET_RULES_POCKET_NOMINATION;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B50);
+    *p = OFFSET_RULES_NOMINATED_POCKET;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_xmmword_267B60);
+    *p = OFFSET_SCREEN_HEIGHT_OFFSET;
+    
+    p = (uint64_t *)(base + OFFSET_NINJA_g_offsets);
+    *p = OFFSET_SCREEN_WIDTH_OFFSET;
+    
+    NSLog(@"[Bypass]   All offsets forced!");
 }
 
-// Hook dlsym để debug
-static void *(*original_dlsym)(void *handle, const char *symbol);
-static void *hooked_dlsym(void *handle, const char *symbol) {
-    void *result = original_dlsym(handle, symbol);
+// ============================================================
+// 9. PATCH VERSION STATE
+// ============================================================
+
+void patch_version_state(LibraryInfo ninja) {
+    if (!ninja.base) return;
     
-    if (symbol) {
-        if (strcmp(symbol, "hs_get_shm_ptr") == 0) {
-            NSLog(@"[Bypass] 🔍 dlsym(hs_get_shm_ptr) = %p", result);
-        } else if (strcmp(symbol, "hs_get_active_key") == 0) {
-            NSLog(@"[Bypass] 🔍 dlsym(hs_get_active_key) = %p", result);
-        } else if (strcmp(symbol, "ninja_get_offset_mask") == 0) {
-            NSLog(@"[Bypass] 🔍 dlsym(ninja_get_offset_mask) = %p", result);
+    uintptr_t addr_state = ninja.slide + OFFSET_NINJA_g_version_state;
+    uint32_t *state_ptr = (uint32_t *)addr_state;
+    
+    uint32_t current = *state_ptr;
+    NSLog(@"[Bypass]   g_ninja_version_state at 0x%llX = %u", (uint64_t)addr_state, current);
+    
+    *state_ptr = 0;
+    
+    uint32_t new_value = *state_ptr;
+    NSLog(@"[Bypass]   g_ninja_version_state changed: %u -> %u", current, new_value);
+}
+
+
+void patch_helpshift(LibraryInfo hs) {
+    if (!hs.base) {
+        NSLog(@"[Bypass] ❌ Cannot patch helpshift!");
+        return;
+    }
+    
+    NSLog(@"[Bypass] Patching libHelpshift.dylib...");
+    
+    uintptr_t addr_shm = hs.slide + OFFSET_HS_g_shm;
+    void **shm_ptr = (void **)addr_shm;
+    *shm_ptr = &g_fake_shm;
+    NSLog(@"[Bypass]   g_shm at 0x%llX -> %p", (uint64_t)addr_shm, &g_fake_shm);
+    
+    uintptr_t addr_key = hs.slide + OFFSET_HS_g_active_key;
+    uint64_t *key_ptr = (uint64_t *)addr_key;
+    *key_ptr = g_fake_active_key;
+    NSLog(@"[Bypass]   g_active_key at 0x%llX -> 0x%llX", (uint64_t)addr_key, g_fake_active_key);
+    
+    uintptr_t addr_user = hs.slide + OFFSET_HS_g_user_id;
+    uint32_t *user_ptr = (uint32_t *)addr_user;
+    *user_ptr = 156417;
+    NSLog(@"[Bypass]   g_user_id at 0x%llX -> %d", (uint64_t)addr_user, 156417);
+    
+    uintptr_t addr_remaining = hs.slide + OFFSET_HS_g_remaining_seconds;
+    uint32_t *remaining_ptr = (uint32_t *)addr_remaining;
+    *remaining_ptr = 2563027;
+    NSLog(@"[Bypass]   g_remaining_seconds at 0x%llX -> %d", (uint64_t)addr_remaining, 2563027);
+    
+    NSLog(@"[Bypass] ✅ libHelpshift.dylib patched!");
+}
+
+// ============================================================
+// 11. PATCH NINJA
+// ============================================================
+
+void patch_ninja(LibraryInfo ninja) {
+    if (!ninja.base) {
+        NSLog(@"[Bypass] ❌ Cannot patch ninja!");
+        return;
+    }
+    
+    NSLog(@"[Bypass] Patching ninja.framework...");
+    
+    uintptr_t addr_logged = ninja.slide + OFFSET_NINJA_logged_in;
+    uint8_t *logged_ptr = (uint8_t *)addr_logged;
+    *logged_ptr = 1;
+    NSLog(@"[Bypass]   logged_in at 0x%llX -> 1", (uint64_t)addr_logged);
+    
+    uintptr_t addr_loaded = ninja.slide + OFFSET_NINJA_g_offsets_loaded;
+    uint8_t *loaded_ptr = (uint8_t *)addr_loaded;
+    *loaded_ptr = 1;
+    NSLog(@"[Bypass]   g_offsets_loaded at 0x%llX -> 1", (uint64_t)addr_loaded);
+    
+    patch_version_state(ninja);
+    force_set_offsets_ninja(ninja);
+    
+    NSLog(@"[Bypass] ✅ ninja.framework patched!");
+}
+
+// ============================================================
+// 12. CHECK STATUS
+// ============================================================
+
+void check_status(LibraryInfo hs, LibraryInfo ninja) {
+    NSLog(@"[Bypass] ========================================");
+    NSLog(@"[Bypass] STATUS CHECK:");
+    
+    if (hs.base) {
+        void *shm = *(void **)(hs.slide + OFFSET_HS_g_shm);
+        uint64_t key = *(uint64_t *)(hs.slide + OFFSET_HS_g_active_key);
+        uint32_t user = *(uint32_t *)(hs.slide + OFFSET_HS_g_user_id);
+        uint32_t remaining = *(uint32_t *)(hs.slide + OFFSET_HS_g_remaining_seconds);
+        NSLog(@"[Bypass]   libHelpshift:");
+        NSLog(@"[Bypass]     g_shm = %p", shm);
+        NSLog(@"[Bypass]     g_active_key = 0x%llX", key);
+        NSLog(@"[Bypass]     g_user_id = %d", user);
+        NSLog(@"[Bypass]     g_remaining_seconds = %d", remaining);
+        
+        if (shm == &g_fake_shm) {
+            FakeSharedMemory *fs = (FakeSharedMemory *)shm;
+            NSLog(@"[Bypass]     fake_shm.state = %u", fs->state);
         }
     }
     
-    return result;
+    if (ninja.base) {
+        uint8_t logged = *(uint8_t *)(ninja.slide + OFFSET_NINJA_logged_in);
+        uint8_t loaded = *(uint8_t *)(ninja.slide + OFFSET_NINJA_g_offsets_loaded);
+        uint32_t state = *(uint32_t *)(ninja.slide + OFFSET_NINJA_g_version_state);
+        NSLog(@"[Bypass]   ninja.framework:");
+        NSLog(@"[Bypass]     logged_in = %d", logged);
+        NSLog(@"[Bypass]     g_offsets_loaded = %d", loaded);
+        NSLog(@"[Bypass]     g_ninja_version_state = %u", state);
+    }
+    
+    NSLog(@"[Bypass] ========================================");
 }
 
-// Constructor - chạy khi dylib được load
+// ============================================================
+// 13. DO_ALL_PATCHES - GỌI NGAY LẬP TỨC
+// ============================================================
+
+static void do_all_patches(void) {
+    NSLog(@"[Bypass] Starting patches (IMMEDIATE)...");
+    
+    setup_fake_shared_memory();
+    
+    LibraryInfo hs = find_library("libHelpshift.dylib");
+    if (hs.base) {
+        patch_helpshift(hs);
+    }
+    
+    LibraryInfo ninja = find_library("ninja.framework");
+    if (ninja.base) {
+        patch_ninja(ninja);
+    }
+    
+    check_status(hs, ninja);
+    
+    NSLog(@"[Bypass] ✅ ALL PATCHES COMPLETED!");
+}
+
+// ============================================================
+// 14. HÀM INITIALIZE - KHÔNG DÙNG dispatch_after
+// ============================================================
+
 __attribute__((constructor)) static void initialize(void) {
     NSLog(@"[Bypass] ========================================");
-    NSLog(@"[Bypass] 🚀 Ninja Bypass Dylib LOADED!");
+    NSLog(@"[Bypass] 🚀 Dylib INJECTED SUCCESSFULLY!");
     NSLog(@"[Bypass] ========================================");
     
-    // Hook dlsym để theo dõi
-    struct rebinding rebindings[] = {
-        {"dlsym", (void *)hooked_dlsym, (void **)&original_dlsym}
-    };
-    rebind_symbols(rebindings, 1);
-    NSLog(@"[Bypass] ✅ dlsym hook installed");
-    
-    // Tạo thread bypass
-    pthread_t thread;
-    pthread_create(&thread, NULL, (void *(*)(void *))bypass_thread, NULL);
-    pthread_detach(thread);
-    
-    NSLog(@"[Bypass] ✅ Bypass thread created");
+    // Patch NGAY LẬP TỨC, không đợi
+    // Dùng dispatch_async với priority cao
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        // Đợi 0.1s để framework load
+        usleep(100000);
+        do_all_patches();
+    });
 }
