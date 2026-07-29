@@ -1,368 +1,346 @@
+// Tweak.xm - Dùng fishhook để hook
 #import <Foundation/Foundation.h>
-#import <mach-o/dyld.h>
+#import <UIKit/UIKit.h>
+#import <string>
+#import <cstring>
+#import <CommonCrypto/CommonCrypto.h>
 #import <dlfcn.h>
-#import "fishhook.h"
+#import <sys/mman.h>
+#import <unistd.h>
+#import <mach-o/dyld.h>
+#import <fishhook.h>
 
-// ========== DECLARE ORIGINAL FUNCTIONS ==========
-void (*orig_DrawLogin)(void*) = NULL;
-void (*orig_DrawMenu)(void*) = NULL;
-void (*orig_FetchSocialInfo)(void) = NULL;
-void (*orig_save_persistence)(void) = NULL;
+// ==================== GLOBAL VARIABLES ====================
 
-// ========== FIND SLIDE ==========
-uintptr_t get_slide() {
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "ninja.framework")) {
-            if (!strstr(name, "libHelpshift.dylib")) {
-                NSLog(@"[Bypass] Found framework: %s", name);
-                return _dyld_get_image_vmaddr_slide(i);
-            }
-        }
-    }
-    return 0;
+extern "C" {
+    void *g_shm;
+    uint64_t g_active_key;
+    uint32_t g_user_id;
+    uint8_t g_aes_key[32];
+    uint64_t g_nonce;
+    uint32_t g_remaining_seconds;
+    uint32_t g_heartbeat_interval;
+    std::string g_username;
+    std::string g_key;
+    std::string g_device_id;
+    std::string g_version;
+    std::string g_server_base;
+    std::string g_session_key;
+    std::string g_heartbeat_token;
 }
 
-// ========== SCAN FOR FUNCTIONS ==========
-void scan_for_functions() {
+// ==================== STRUCT SHARED MEMORY ====================
+
+struct NinjaShm {
+    uint8_t unknown1[8];
+    uint64_t pid;
+    uint8_t unknown2[6];
+    uint8_t status;
+    uint32_t version;
+    uint32_t build_version;
+    uint32_t flags;
+    uint8_t unknown3[12];
+    uint64_t nonce;
+    uint8_t unknown4[8];
+    uint32_t remaining_sec;
+};
+
+// ==================== HARDCODED DATA ====================
+
+#define HARDCODED_USERNAME "A9Der4qHxPbmAyfLa3Ka109y2fcYrCsa"
+#define HARDCODED_KEY "A9Der4qHxPbmAyfLa3Ka109y2fcYrCsa"
+#define HARDCODED_DEVICE_ID "BD0773FE-2C91-40DA-89A5-498BA7F54DF1"
+#define HARDCODED_VERSION "56.26.0"
+#define HARDCODED_BUILD_VERSION 562600
+#define HARDCODED_SESSION_KEY "bd9485e5db686393032a3078364ded93801dd4b87d0978156541c8f7d6f4f5c8"
+#define HARDCODED_HEARTBEAT_TOKEN "eaa0d651dfd7a0e91c46c519240a79f31b5f83d3760a10017f31678406c5d3b4"
+#define HARDCODED_USER_ID 156417
+#define HARDCODED_HEARTBEAT_INTERVAL 60
+#define HARDCODED_REMAINING_SECONDS 2563027
+#define HARDCODED_NONCE 0x934fdc2833e915e8
+
+// ==================== FIND SYMBOLS ====================
+
+static void* find_symbol(const char* name) {
     void *handle = dlopen(NULL, RTLD_LAZY);
-    if (!handle) return;
-    
-    const char* possible_names[] = {
-        "_Z8DrawMenuP11ImGuiIO_",
-        "_Z8DrawMenuPv",
-        "_Z8DrawMenuv",
-        "_ZN6ImGui8DrawMenuEP11ImGuiIO_",
-        "_ZL8DrawMenuP11ImGuiIO_",
-        "_Z8DrawMenuPKc",
-        "DrawMenu",
-        "_Z9DrawLoginP11ImGuiIO_",
-        "_Z16FetchSocialInfov",
-        "_Z17save_persistencev",
-        NULL
-    };
-    
-    for (int i = 0; possible_names[i] != NULL; i++) {
-        void *func = dlsym(handle, possible_names[i]);
-        if (func) {
-            NSLog(@"[Bypass] ✅ Found: %s -> %p", possible_names[i], func);
-        }
-    }
+    if (!handle) return NULL;
+    void *sym = dlsym(handle, name);
     dlclose(handle);
+    return sym;
 }
 
-// ========== PATCH ALL ==========
-void patch_all() {
-    uintptr_t slide = get_slide();
-    if (slide == 0) {
-        NSLog(@"[Bypass] Cannot find framework!");
-        return;
-    }
-    
-    // OFFSETS TỪ IDA
-    uintptr_t addr_logged_in = slide + 0x22F6F9;
-    uintptr_t addr_is_logging_in = slide + 0x22F6F8;
-    uintptr_t addr_first_time = slide + 0x22F899;
-    uintptr_t addr_g_login_show_password = slide + 0x22F898;
-    uintptr_t addr_g_MenuLangLoaded = slide + 0x22F8ED;
-    uintptr_t addr_s_logged_login_screen = slide + 0x22F768;
-    uintptr_t addr_s_seeded = slide + 0x22F769;
-    uintptr_t addr_langDropdownOpen = slide + 0x22F86A;
-    uintptr_t addr_s_socialFetchTriggered = slide + 0x22F891;
-    uintptr_t addr_spinner_angle = slide + 0x22F894;
-    uintptr_t addr_g_SocialFetched = slide + 0x22F890;
-    uintptr_t addr_g_ResellerFetched = slide + 0x22F88E;
-    uintptr_t addr_g_ResellerFetching = slide + 0x22F88F;
-    
-    // PATCH
-    *(uint8_t *)addr_logged_in = 1;
-    *(uint8_t *)addr_is_logging_in = 0;
-    *(uint8_t *)addr_first_time = 1;
-    *(uint8_t *)addr_s_logged_login_screen = 1;
-    *(uint8_t *)addr_s_seeded = 1;
-    *(uint8_t *)addr_s_socialFetchTriggered = 1;
-    *(uint8_t *)addr_langDropdownOpen = 0;
-    *(uint8_t *)addr_g_MenuLangLoaded = 1;
-    *(uint8_t *)addr_g_login_show_password = 0;
-    *(uint8_t *)addr_g_SocialFetched = 1;
-    *(uint8_t *)addr_g_ResellerFetched = 1;
-    *(uint8_t *)addr_g_ResellerFetching = 0;
-    *(int *)addr_spinner_angle = 0;
-    
-    // Patch thêm vùng bss xung quanh
-    for (int offset = 0x22F6F0; offset < 0x22F730; offset++) {
-        uintptr_t addr = slide + offset;
-        uint8_t value = *(uint8_t *)addr;
-        if (value == 0 || value == 1) {
-            *(uint8_t *)addr = 1;
-        }
-    }
-    
-    NSLog(@"[Bypass] ✅ All patches applied!");
-    NSLog(@"[Bypass] logged_in=%d, is_logging_in=%d", 
-          *(uint8_t *)addr_logged_in, *(uint8_t *)addr_is_logging_in);
+// ==================== GET GLOBAL ADDRESS ====================
+
+static void* get_global_address(const char* name) {
+    void *handle = dlopen(NULL, RTLD_LAZY);
+    if (!handle) return NULL;
+    void *sym = dlsym(handle, name);
+    dlclose(handle);
+    return sym;
 }
 
-// ========== HOOK DRAWLOGIN ==========
-void my_DrawLogin(void *a1) {
-    NSLog(@"[Bypass] ⚡ DrawLogin called");
-    patch_all();
-    
-    // Gọi DrawMenu trực tiếp
-    void (*DrawMenu)(void*) = dlsym(RTLD_DEFAULT, "_Z8DrawMenuP11ImGuiIO_");
-    if (DrawMenu) {
-        NSLog(@"[Bypass] 🎯 Calling DrawMenu directly!");
-        DrawMenu(a1);
-        return;
+// ==================== SHARED MEMORY ====================
+
+static void* init_shared_memory() {
+    void *shm = malloc(sizeof(NinjaShm));
+    if (!shm) {
+        NSLog(@"[Bypass] malloc failed");
+        return NULL;
     }
     
-    // Fallback
-    if (orig_DrawLogin) {
-        orig_DrawLogin(a1);
-    }
+    mlock(shm, sizeof(NinjaShm));
+    memset(shm, 0, sizeof(NinjaShm));
+    
+    NSLog(@"[Bypass] Shared memory created at: %p", shm);
+    return shm;
 }
 
-// ========== HOOK DRAWMENU ==========
-void my_DrawMenu(void *a1) {
-    NSLog(@"[Bypass] 🎯 DrawMenu called!");
-    patch_all();
+// ==================== FIND GLOBALS ====================
+
+static void find_globals() {
+    void *p;
     
-    if (orig_DrawMenu) {
-        orig_DrawMenu(a1);
-    }
-}
-
-// ========== HOOK FETCH SOCIAL INFO ==========
-void my_FetchSocialInfo() {
-    NSLog(@"[Bypass] 📡 FetchSocialInfo blocked!");
-    // Không gọi hàm gốc
-}
-
-// ========== HOOK SAVE PERSISTENCE ==========
-void my_save_persistence() {
-    NSLog(@"[Bypass] 💾 save_persistence blocked!");
-    // Không gọi hàm gốc
-}
-
-// ========== INSTALL HOOKS ==========
-void install_hooks() {
-    struct rebinding rebindings[4];
-    int count = 0;
-    
-    // Hook DrawLogin
-    void *drawlogin = dlsym(RTLD_DEFAULT, "_Z9DrawLoginP11ImGuiIO_");
-    if (drawlogin) {
-        rebindings[count].name = "_Z9DrawLoginP11ImGuiIO_";
-        rebindings[count].replacement = (void *)my_DrawLogin;
-        rebindings[count].replaced = (void **)&orig_DrawLogin;
-        count++;
+    // Các global trong bss
+    p = get_global_address("__ZL5g_shm");
+    if (p) {
+        g_shm = *(void**)p;
+        NSLog(@"[Bypass] g_shm address: %p, value: %p", p, g_shm);
     }
     
-    // Hook DrawMenu
-    void *drawmenu = dlsym(RTLD_DEFAULT, "_Z8DrawMenuP11ImGuiIO_");
-    if (drawmenu) {
-        rebindings[count].name = "_Z8DrawMenuP11ImGuiIO_";
-        rebindings[count].replacement = (void *)my_DrawMenu;
-        rebindings[count].replaced = (void **)&orig_DrawMenu;
-        count++;
+    p = get_global_address("__ZL7g_nonce");
+    if (p) {
+        g_nonce = *(uint64_t*)p;
+        NSLog(@"[Bypass] g_nonce address: %p, value: 0x%llx", p, g_nonce);
     }
     
-    // Hook FetchSocialInfo
-    void *fetch = dlsym(RTLD_DEFAULT, "_Z16FetchSocialInfov");
-    if (fetch) {
-        rebindings[count].name = "_Z16FetchSocialInfov";
-        rebindings[count].replacement = (void *)my_FetchSocialInfo;
-        rebindings[count].replaced = (void **)&orig_FetchSocialInfo;
-        count++;
+    p = get_global_address("__ZL9g_user_id");
+    if (p) {
+        g_user_id = *(uint32_t*)p;
+        NSLog(@"[Bypass] g_user_id address: %p, value: %u", p, g_user_id);
     }
     
-    // Hook save_persistence
-    void *save = dlsym(RTLD_DEFAULT, "_Z17save_persistencev");
-    if (save) {
-        rebindings[count].name = "_Z17save_persistencev";
-        rebindings[count].replacement = (void *)my_save_persistence;
-        rebindings[count].replaced = (void **)&orig_save_persistence;
-        count++;
+    p = get_global_address("__ZL12g_active_key");
+    if (p) {
+        g_active_key = *(uint64_t*)p;
+        NSLog(@"[Bypass] g_active_key address: %p", p);
     }
     
-    int result = rebind_symbols(rebindings, count);
-    NSLog(@"[Bypass] Hook result: %d (%d hooks)", result, count);
-}
-
-// ========== CALL DRAWMENU REPEATEDLY ==========
-void trigger_menu_loop() {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        int count = 0;
-        while (1) {
-            [NSThread sleepForTimeInterval:2.0];
-            count++;
-            
-            dispatch_async(dispatch_get_main_queue(), ^{
-                patch_all();
-                
-                void (*DrawMenu)(void*) = dlsym(RTLD_DEFAULT, "_Z8DrawMenuP11ImGuiIO_");
-                if (DrawMenu) {
-                    NSLog(@"[Bypass] 🔄 Triggering DrawMenu #%d", count);
-                    DrawMenu(NULL);
-                }
-            });
-        }
-    });
-}
-
-// ========== INITIALIZE ==========
-__attribute__((constructor)) static void initialize() {
-    NSLog(@"[Bypass] ========================================");
-    NSLog(@"[Bypass] 🚀 Bypass dylib loaded!");
-    NSLog(@"[Bypass] ========================================");
+    p = get_global_address("__ZL9g_aes_key");
+    if (p) {
+        memcpy(g_aes_key, p, 32);
+        NSLog(@"[Bypass] g_aes_key address: %p", p);
+    }
     
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC), 
-                   dispatch_get_main_queue(), ^{
+    p = get_global_address("__ZL19g_remaining_seconds");
+    if (p) {
+        g_remaining_seconds = *(uint32_t*)p;
+        NSLog(@"[Bypass] g_remaining_seconds address: %p", p);
+    }
+    
+    p = get_global_address("__ZL20g_heartbeat_interval");
+    if (p) {
+        g_heartbeat_interval = *(uint32_t*)p;
+        NSLog(@"[Bypass] g_heartbeat_interval address: %p", p);
+    }
+    
+    // Các std::string globals
+    p = get_global_address("__ZL10g_username");
+    if (p) {
+        g_username = *(std::string*)p;
+        NSLog(@"[Bypass] g_username address: %p", p);
+    }
+    
+    p = get_global_address("__ZL13g_session_key");
+    if (p) {
+        g_session_key = *(std::string*)p;
+        NSLog(@"[Bypass] g_session_key address: %p", p);
+    }
+    
+    p = get_global_address("__ZL17g_heartbeat_token");
+    if (p) {
+        g_heartbeat_token = *(std::string*)p;
+        NSLog(@"[Bypass] g_heartbeat_token address: %p", p);
+    }
+    
+    // Nếu g_shm NULL, tạo mới và gán
+    if (g_shm == NULL) {
+        NSLog(@"[Bypass] g_shm is NULL, creating new shared memory");
+        void *new_shm = init_shared_memory();
         
-        // 1. Scan functions
-        scan_for_functions();
-        
-        // 2. Patch all
-        patch_all();
-        
-        // 3. Install hooks
-        install_hooks();
-        
-        // 4. Trigger menu
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), 
-                       dispatch_get_main_queue(), ^{
-            void (*DrawMenu)(void*) = dlsym(RTLD_DEFAULT, "_Z8DrawMenuP11ImGuiIO_");
-            if (DrawMenu) {
-                NSLog(@"[Bypass] 🚀 First DrawMenu trigger!");
-                DrawMenu(NULL);
+        if (new_shm) {
+            p = get_global_address("__ZL5g_shm");
+            if (p) {
+                *(void**)p = new_shm;
+                g_shm = new_shm;
+                NSLog(@"[Bypass] Assigned g_shm = %p", g_shm);
             } else {
-                NSLog(@"[Bypass] ❌ DrawMenu not found!");
-            }
-        });
-        
-        // 5. Trigger loop
-        trigger_menu_loop();
-    });
-}
-
-
-//////////////////////////////////
-
-
-#import <Foundation/Foundation.h>
-#import <mach-o/dyld.h>
-#import <dlfcn.h>
-#import "fishhook.h"
-
-// ========== DECLARE ORIGINAL FUNCTIONS ==========
-void (*orig_DrawLogin)(void*) = NULL;
-
-// ========== FIND SLIDE ==========
-uintptr_t get_slide() {
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "ninja.framework")) {
-            if (!strstr(name, "libHelpshift.dylib")) {
-                NSLog(@"[Bypass] Found framework: %s", name);
-                return _dyld_get_image_vmaddr_slide(i);
+                static void *static_shm = NULL;
+                static_shm = new_shm;
+                g_shm = static_shm;
+                NSLog(@"[Bypass] Using static g_shm = %p", g_shm);
             }
         }
     }
-    return 0;
 }
 
-// ========== PATCH BY OFFSET ==========
-void patch_login_state() {
-    uintptr_t slide = get_slide();
-    if (slide == 0) {
-        NSLog(@"[Bypass] Cannot find framework!");
-        return;
-    }
+// ==================== FUNCTION TYPES ====================
+
+typedef void (*hs_deliver_credentials_t)(void*, void*, void*, void*, void*);
+
+// ==================== ORIGINAL FUNCTION ====================
+
+static hs_deliver_credentials_t original_hs_deliver_credentials = NULL;
+
+// ==================== HOOK FUNCTION ====================
+
+static void hooked_hs_deliver_credentials(
+    void *__s,
+    void *a2,
+    void *a3,
+    void *a4,
+    void *a5
+) {
+    NSLog(@"[Bypass] ===== HOOKED hs_deliver_credentials =====");
+    NSLog(@"[Bypass] Username: %s", __s ? (char *)__s : "NULL");
+    NSLog(@"[Bypass] Device ID: %s", a3 ? (char *)a3 : "NULL");
+    NSLog(@"[Bypass] Version: %s", a4 ? (char *)a4 : "NULL");
     
-    // Địa chỉ từ bss
-    uintptr_t addr_logged_in = slide + 0x22F6F9;
-    uintptr_t addr_is_logging_in = slide + 0x22F6F8;
-    
-    NSLog(@"[Bypass] logged_in at: 0x%lx", addr_logged_in);
-    NSLog(@"[Bypass] is_logging_in at: 0x%lx", addr_is_logging_in);
-    
-    // Đọc giá trị hiện tại
-    uint8_t current_logged = *(uint8_t *)addr_logged_in;
-    uint8_t current_is_logging = *(uint8_t *)addr_is_logging_in;
-    
-    NSLog(@"[Bypass] Current: logged_in=%d, is_logging_in=%d", 
-          current_logged, current_is_logging);
-    
-    // Patch
-    *(uint8_t *)addr_is_logging_in = 0;
-    *(uint8_t *)addr_logged_in = 1;
-    
-    // Verify
-    uint8_t new_logged = *(uint8_t *)addr_logged_in;
-    uint8_t new_is_logging = *(uint8_t *)addr_is_logging_in;
-    
-    if (new_logged == 1 && new_is_logging == 0) {
-        NSLog(@"[Bypass] ✅ PATCH SUCCESS!");
-    } else {
-        NSLog(@"[Bypass] ❌ PATCH FAILED!");
+    @try {
+        // Gán hardcoded data
+        g_username = std::string(HARDCODED_USERNAME);
+        g_key = std::string(HARDCODED_KEY);
+        g_device_id = std::string(HARDCODED_DEVICE_ID);
+        g_version = std::string(HARDCODED_VERSION);
+        g_server_base = a5 ? std::string((char*)a5) : std::string("https://anubisw.com");
+        
+        // Gán session data
+        g_session_key = std::string(HARDCODED_SESSION_KEY);
+        g_heartbeat_token = std::string(HARDCODED_HEARTBEAT_TOKEN);
+        
+        g_heartbeat_interval = HARDCODED_HEARTBEAT_INTERVAL;
+        g_remaining_seconds = HARDCODED_REMAINING_SECONDS;
+        g_user_id = HARDCODED_USER_ID;
+        g_nonce = HARDCODED_NONCE;
+        
+        // Tính active key
+        uint8_t hmac_out[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256_CTX ctx;
+        CC_SHA256_Init(&ctx);
+        CC_SHA256_Update(&ctx, HARDCODED_SESSION_KEY, (CC_LONG)strlen(HARDCODED_SESSION_KEY));
+        CC_SHA256_Update(&ctx, &g_nonce, sizeof(g_nonce));
+        pid_t pid = getpid();
+        CC_SHA256_Update(&ctx, &pid, sizeof(pid));
+        CC_SHA256_Final(hmac_out, &ctx);
+        memcpy(&g_active_key, hmac_out, sizeof(uint64_t));
+        
+        // Ghi vào shared memory
+        if (g_shm) {
+            NinjaShm *shm = (NinjaShm *)g_shm;
+            
+            shm->status = 0;
+            shm->pid = getpid();
+            shm->version = 31;
+            shm->build_version = HARDCODED_BUILD_VERSION;
+            shm->flags = 31;
+            shm->nonce = HARDCODED_NONCE;
+            shm->remaining_sec = HARDCODED_REMAINING_SECONDS;
+            
+            __sync_synchronize();
+            shm->status = 1;
+            __sync_synchronize();
+            
+            NSLog(@"[Bypass] Shared memory updated:");
+            NSLog(@"[Bypass]   status: %d", shm->status);
+            NSLog(@"[Bypass]   pid: %llu", shm->pid);
+            NSLog(@"[Bypass]   build: %u", shm->build_version);
+            NSLog(@"[Bypass]   remaining: %u", shm->remaining_sec);
+            NSLog(@"[Bypass]   nonce: 0x%llx", shm->nonce);
+        } else {
+            NSLog(@"[Bypass] WARNING: g_shm is NULL");
+        }
+        
+        // KHÔNG gọi original
+        NSLog(@"[Bypass] ===== BYPASS COMPLETE =====");
+        
+    } @catch (NSException *e) {
+        NSLog(@"[Bypass] Exception: %@", e);
     }
 }
 
-// ========== HOOK DRAWLOGIN ==========
-void my_DrawLogin(void *a1) {
-    NSLog(@"[Bypass] ⚡ DrawLogin called - patching...");
-    
-    // Patch mỗi khi DrawLogin được gọi
-    patch_login_state();
-    
-    // Gọi hàm gốc
-    if (orig_DrawLogin) {
-        orig_DrawLogin(a1);
-    }
+// ==================== HOOK HS_HTTPS_POST ====================
+
+typedef int (*hs_https_post_t)(const char*, const void*, int, void*, int);
+static hs_https_post_t original_hs_https_post = NULL;
+
+static int hooked_hs_https_post(const char *url, const void *data, int len, void *response, int timeout) {
+    NSLog(@"[Bypass] hs_https_post: %s", url ? url : "NULL");
+    return 200; // Luôn trả về thành công
 }
 
-// ========== INITIALIZE ==========
-__attribute__((constructor)) static void initialize() {
-    NSLog(@"[Bypass] ========================================");
-    NSLog(@"[Bypass] 🚀 Dylib INJECTED SUCCESSFULLY!");
-    NSLog(@"[Bypass] ========================================");
+// ==================== SETUP HOOKS ====================
+
+static void setup_hooks() {
+    // Hook hs_deliver_credentials
+    void *target = find_symbol("_hs_deliver_credentials");
+    if (!target) target = find_symbol("hs_deliver_credentials");
     
-    // Đợi game load
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC), 
-                   dispatch_get_main_queue(), ^{
+    if (target) {
+        NSLog(@"[Bypass] Found hs_deliver_credentials at: %p", target);
+        original_hs_deliver_credentials = (hs_deliver_credentials_t)target;
         
-        // Patch trực tiếp
-        patch_login_state();
-        
-        // Hook DrawLogin (nếu muốn)
-        // Sử dụng rebind_symbols với struct đúng
-        struct rebinding rebindings[1];
-        rebindings[0].name = "_Z9DrawLoginP11ImGuiIO_";
-        rebindings[0].replacement = (void *)my_DrawLogin;
-        rebindings[0].replaced = (void **)&orig_DrawLogin;
-        
-        int result = rebind_symbols(rebindings, 1);
+        // Dùng fishhook
+        int result = rebind_symbols((struct rebinding[]){
+            {"_hs_deliver_credentials", (void*)hooked_hs_deliver_credentials, (void**)&original_hs_deliver_credentials}
+        }, 1);
         
         if (result == 0) {
-            NSLog(@"[Bypass] ✅ DrawLogin hooked successfully!");
+            NSLog(@"[Bypass] Fishhook success!");
         } else {
-            NSLog(@"[Bypass] ⚠️ Failed to hook DrawLogin (result: %d)", result);
+            NSLog(@"[Bypass] Fishhook failed, trying manual hook...");
+            // Fallback manual hook
+            uintptr_t page = (uintptr_t)target & ~(PAGE_SIZE - 1);
+            mprotect((void *)page, PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC);
+            
+            uint64_t addr = (uint64_t)hooked_hs_deliver_credentials;
+            uint32_t *code = (uint32_t *)target;
+            code[0] = 0xD2800000 | ((addr & 0xFFFF) << 5);
+            code[1] = 0xF2A00000 | (((addr >> 16) & 0xFFFF) << 5);
+            code[2] = 0xF2C00000 | (((addr >> 32) & 0xFFFF) << 5);
+            code[3] = 0xF2E00000 | (((addr >> 48) & 0xFFFF) << 5);
+            code[4] = 0xD61F0200;
+            __sync_synchronize();
+        }
+    }
+    
+    // Hook hs_https_post
+    void *target_http = find_symbol("_hs_https_post");
+    if (!target_http) target_http = find_symbol("hs_https_post");
+    
+    if (target_http) {
+        NSLog(@"[Bypass] Found hs_https_post at: %p", target_http);
+        rebind_symbols((struct rebinding[]){
+            {"_hs_https_post", (void*)hooked_hs_https_post, (void**)&original_hs_https_post}
+        }, 1);
+    }
+}
+
+// ==================== INIT ====================
+
+__attribute__((constructor))
+static void init() {
+    NSLog(@"[Bypass] ===== DYLIB LOADED ===== PID: %d", getpid());
+    
+    @try {
+        find_globals();
+        setup_hooks();
+        
+        if (g_shm) {
+            NinjaShm *shm = (NinjaShm *)g_shm;
+            NSLog(@"[Bypass] SHM status: %d", shm->status);
         }
         
-        // Patch lại sau 5 giây
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5.0 * NSEC_PER_SEC), 
-                       dispatch_get_main_queue(), ^{
-            patch_login_state();
-        });
-        
-        // Patch định kỳ
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            while (1) {
-                [NSThread sleepForTimeInterval:10.0];
-                patch_login_state();
-            }
-        });
-    });
+        NSLog(@"[Bypass] ===== INIT COMPLETE =====");
+    } @catch (NSException *e) {
+        NSLog(@"[Bypass] Init error: %@", e);
+    }
 }
