@@ -223,7 +223,7 @@ static double hooked_addCreditText(id self, SEL _cmd, double a3, double a4, doub
                 if ([subview isKindOfClass:[UILabel class]]) {
                     UILabel *label = (UILabel *)subview;
                     if (label.text && label.text.length > 0) {
-                        label.text = @"Bình Bun - GMV MOBA";
+                        label.text = @"GMV MOBA";
                         [label setNeedsDisplay];
                         break;
                     }
@@ -242,12 +242,12 @@ static double hooked_buildProfileUI(id self, SEL _cmd, double a3, double a4, dou
     double result = orig_buildProfileUI(self, _cmd, a3, a4, a5);
     
     NSArray *contents = @[
-        @"Bình Bun - GMV MOBA",
-        @"Bình Bun - GMV MOBA",
-        @"Bình Bun - GMV MOBA",
-        @"Liên hệ: Bình Bun",
-        @"Discord: Bình Bun#1234",
-        @"Fanpage: GMV MOBA"
+        @"Hack Free VIP by GMV MOBA",
+        @"@_@",
+        @"@_@",
+        @"@_@",
+        @"@_@",
+        @"@_@"
     ];
     
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -282,12 +282,12 @@ static id hooked_loc(id self, SEL _cmd, id arg1) {
         NSArray *keywords = @[@"credit", @"profile", @"Bình", @"GMV", @"MOBA"];
         for (NSString *keyword in keywords) {
             if ([key containsString:keyword]) {
-                return @"Bình Bun - GMV MOBA";
+                return @"GMV MOBA";
             }
         }
         
         if (key.length > 20) {
-            return @"Bình Bun - GMV MOBA";
+            return @"GMV MOBA";
         }
     }
     
