@@ -18,6 +18,475 @@ static _Thread_local int _inHook = 0;
     } \
 } while(0)
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Helper Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+static NSString *hexBytes(const void *bytes, size_t len) {
+    if (!bytes || len == 0) return @"<empty>";
+    const uint8_t *b = (const uint8_t *)bytes;
+    NSMutableString *s = [NSMutableString stringWithCapacity:len * 3];
+    for (size_t i = 0; i < len; i++) {
+        [s appendFormat:@"%02x ", b[i]];
+    }
+    return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+}
+
+static NSString *ccAlgName(CCAlgorithm a) {
+    switch(a) {
+        case kCCAlgorithmAES:      return @"AES";
+        case kCCAlgorithmDES:      return @"DES";
+        case kCCAlgorithm3DES:     return @"3DES";
+        case kCCAlgorithmRC4:      return @"RC4";
+        case kCCAlgorithmRC2:      return @"RC2";
+        case kCCAlgorithmBlowfish: return @"Blowfish";
+        default: return [NSString stringWithFormat:@"Alg(%u)", a];
+    }
+}
+
+static NSString *hmacAlgName(CCHmacAlgorithm a) {
+    switch(a) {
+        case kCCHmacAlgSHA1:   return @"SHA1";
+        case kCCHmacAlgSHA256: return @"SHA256";
+        case kCCHmacAlgSHA384: return @"SHA384";
+        case kCCHmacAlgSHA512: return @"SHA512";
+        case kCCHmacAlgMD5:    return @"MD5";
+        default: return @"Unknown";
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Caller Tracking (Tối giản)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#define AL_CALLER_DEPTH  1
+#define AL_CALLER_FILTER @"com.miniclip.8ballpoolmult"
+
+static NSString *callerInfo(NSString * _Nullable filterPrefix, int depth) {
+    NSArray<NSString *> *stack = [NSThread callStackSymbols];
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    int found = 0;
+    
+    for (NSUInteger i = 2; i < stack.count && found < depth; i++) {
+        NSString *frame = stack[i];
+        if ([frame containsString:@"al_"] || [frame containsString:@"AppLogger"]) continue;
+        if (filterPrefix && filterPrefix.length > 0) {
+            if (![frame containsString:filterPrefix]) continue;
+        }
+        NSRange r1 = [frame rangeOfString:@"0x"];
+        if (r1.location != NSNotFound) {
+            NSString *clean = [frame substringFromIndex:r1.location];
+            NSRange r2 = [clean rangeOfString:@" " options:NSBackwardsSearch];
+            if (r2.location != NSNotFound && r2.location + 1 < clean.length) {
+                clean = [clean substringFromIndex:r2.location + 1];
+            }
+            [result addObject:clean];
+            found++;
+        }
+    }
+    
+    return result.count > 0 ? result.firstObject : @"<unknown>";
+}
+
+#define ALOG_CALLER() do { \
+    if (_inHook == 0) { \
+        _inHook++; \
+        ALOG(@"↳ %@", callerInfo(AL_CALLER_FILTER, AL_CALLER_DEPTH)); \
+        _inHook--; \
+    } \
+} while(0)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Log Body FULL không giới hạn
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void LogFullBody(NSString *prefix, NSData *data) {
+    if (!data || data.length == 0) {
+        ALOG(@"%@ <empty>", prefix);
+        return;
+    }
+    
+    ALOG(@"%@ [%lu bytes]:", prefix, (unsigned long)data.length);
+    
+    // Log FULL hex từng dòng 32 bytes
+    const uint8_t *bytes = (const uint8_t *)data.bytes;
+    size_t length = data.length;
+    size_t offset = 0;
+    
+    while (offset < length) {
+        size_t remain = length - offset;
+        size_t lineLen = remain > 32 ? 32 : remain;
+        
+        NSMutableString *hexLine = [NSMutableString stringWithCapacity:lineLen * 3];
+        NSMutableString *asciiLine = [NSMutableString stringWithCapacity:lineLen];
+        
+        for (size_t i = 0; i < lineLen; i++) {
+            uint8_t byte = bytes[offset + i];
+            [hexLine appendFormat:@"%02x ", byte];
+            char c = (byte >= 32 && byte < 127) ? byte : '.';
+            [asciiLine appendFormat:@"%c", c];
+        }
+        
+        // Thêm padding để align
+        while (hexLine.length < 32 * 3) {
+            [hexLine appendString:@"   "];
+        }
+        
+        ALOG(@"%@ %04zx: %@ | %@", prefix, offset, hexLine, asciiLine);
+        offset += lineLen;
+    }
+    
+    // Thử hiển thị dạng text nếu là UTF-8
+    NSString *str = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (str && str.length > 0) {
+        ALOG(@"%@ TEXT (first 500 chars):", prefix);
+        // Log từng dòng text
+        NSUInteger textLen = str.length;
+        NSUInteger textOffset = 0;
+        NSUInteger chunkSize = 200;
+        
+        while (textOffset < textLen) {
+            NSUInteger remain = textLen - textOffset;
+            NSUInteger thisChunk = remain > chunkSize ? chunkSize : remain;
+            NSString *chunk = [str substringWithRange:NSMakeRange(textOffset, thisChunk)];
+            // Escape newlines để log 1 dòng
+            chunk = [chunk stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+            chunk = [chunk stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
+            ALOG(@"%@   %@", prefix, chunk);
+            textOffset += thisChunk;
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - NSURLSession Hook (CHỈ LOG BODY)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@interface NSURLSession (AL) @end
+@implementation NSURLSession (AL)
+
++ (void)load {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = [NSURLSession class];
+        void (^sw)(SEL,SEL) = ^(SEL o, SEL h) {
+            Method a = class_getInstanceMethod(cls, o);
+            Method b = class_getInstanceMethod(cls, h);
+            if (a && b) { method_exchangeImplementations(a, b); }
+        };
+        sw(@selector(dataTaskWithRequest:completionHandler:),
+           @selector(al_dataTaskWithRequest:completionHandler:));
+        sw(@selector(dataTaskWithURL:completionHandler:),
+           @selector(al_dataTaskWithURL:completionHandler:));
+        sw(@selector(uploadTaskWithRequest:fromData:completionHandler:),
+           @selector(al_uploadTaskWithRequest:fromData:completionHandler:));
+    });
+}
+
+static void _logReq(NSURLRequest *req) {
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    ALOG(@"📤 %@ %@", req.HTTPMethod ?: @"GET", req.URL.absoluteString);
+    if (req.HTTPBody.length) {
+        LogFullBody(@"REQUEST BODY", req.HTTPBody);
+    } else {
+        ALOG(@"REQUEST BODY: <empty>");
+    }
+    ALOG_CALLER();
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+}
+
+static void _logResp(NSURL *url, NSData *data, NSURLResponse *resp, NSError *err) {
+    NSHTTPURLResponse *http = (NSHTTPURLResponse *)resp;
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    
+    if (err) {
+        ALOG(@"❌ ERROR %@: %@", url.absoluteString, err);
+        ALOG(@"═══════════════════════════════════════════════════════════════");
+        return;
+    }
+    
+    ALOG(@"📥 %ld %@", (long)http.statusCode, url.absoluteString);
+    if (data.length) {
+        LogFullBody(@"RESPONSE BODY", data);
+    } else {
+        ALOG(@"RESPONSE BODY: <empty>");
+    }
+    ALOG_CALLER();
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+}
+
+- (NSURLSessionDataTask *)al_dataTaskWithRequest:(NSURLRequest *)req
+                               completionHandler:(void(^)(NSData*,NSURLResponse*,NSError*))cb {
+    _logReq(req);
+    return [self al_dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        _logResp(req.URL, d, r, e);
+        if (cb) cb(d, r, e);
+    }];
+}
+
+- (NSURLSessionDataTask *)al_dataTaskWithURL:(NSURL *)url
+                           completionHandler:(void(^)(NSData*,NSURLResponse*,NSError*))cb {
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    ALOG(@"📤 GET %@", url.absoluteString);
+    ALOG(@"REQUEST BODY: <empty>");
+    ALOG_CALLER();
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    return [self al_dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        _logResp(url, d, r, e);
+        if (cb) cb(d, r, e);
+    }];
+}
+
+- (NSURLSessionUploadTask *)al_uploadTaskWithRequest:(NSURLRequest *)req
+                                            fromData:(NSData *)body
+                                   completionHandler:(void(^)(NSData*,NSURLResponse*,NSError*))cb {
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    ALOG(@"📤 UPLOAD %@ %@", req.HTTPMethod, req.URL.absoluteString);
+    if (body.length) {
+        LogFullBody(@"UPLOAD BODY", body);
+    }
+    ALOG_CALLER();
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    return [self al_uploadTaskWithRequest:req fromData:body completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        _logResp(req.URL, d, r, e);
+        if (cb) cb(d, r, e);
+    }];
+}
+@end
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - CCCrypt / CCHmac (LOG NGẮN)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static CCCryptorStatus al_CCCrypt(
+    CCOperation op, CCAlgorithm alg, CCOptions opts,
+    const void *key, size_t keyLen,
+    const void *iv,
+    const void *in, size_t inLen,
+    void *out, size_t outAvail, size_t *outMoved)
+{
+    CCCryptorStatus st = CCCrypt(op, alg, opts, key, keyLen, iv, in, inLen, out, outAvail, outMoved);
+    
+    if (st == kCCSuccess) {
+        ALOG(@"═══════════════════════════════════════════════════════════════");
+        ALOG(@"🔐 %@ %@ [in:%zu out:%zu]", 
+             (op == kCCEncrypt) ? @"ENC" : @"DEC",
+             ccAlgName(alg), inLen, outMoved ? *outMoved : 0);
+        if (keyLen) ALOG(@"Key: %@", hexBytes(key, MIN(keyLen, 32)));
+        if (inLen) ALOG(@"In:  %@", hexBytes(in, MIN(inLen, 64)));
+        if (outMoved && *outMoved) ALOG(@"Out: %@", hexBytes(out, MIN(*outMoved, 64)));
+        ALOG_CALLER();
+        ALOG(@"═══════════════════════════════════════════════════════════════");
+    }
+    
+    return st;
+}
+
+static void al_CCHmac(CCHmacAlgorithm alg,
+                      const void *key, size_t keyLen,
+                      const void *data, size_t dataLen,
+                      void *mac)
+{
+    CCHmac(alg, key, keyLen, data, dataLen, mac);
+    
+    size_t macLen = 32;
+    switch(alg) {
+        case kCCHmacAlgMD5: macLen = 16; break;
+        case kCCHmacAlgSHA1: macLen = 20; break;
+        case kCCHmacAlgSHA256: macLen = 32; break;
+        case kCCHmacAlgSHA384: macLen = 48; break;
+        case kCCHmacAlgSHA512: macLen = 64; break;
+        default: macLen = 32;
+    }
+    
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+    ALOG(@"🔑 HMAC %@ [data:%zu mac:%zu]", hmacAlgName(alg), dataLen, macLen);
+    ALOG(@"Key: %@", hexBytes(key, MIN(keyLen, 32)));
+    ALOG(@"MAC: %@", hexBytes(mac, macLen));
+    ALOG_CALLER();
+    ALOG(@"═══════════════════════════════════════════════════════════════");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - NSJSONSerialization (CHỈ LOG LỖI)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@interface NSJSONSerialization (AL) @end
+@implementation NSJSONSerialization (AL)
+
++ (void)load {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void (^sw)(SEL,SEL) = ^(SEL o, SEL h) {
+            Method a = class_getClassMethod([NSJSONSerialization class], o);
+            Method b = class_getClassMethod([NSJSONSerialization class], h);
+            if (a && b) { method_exchangeImplementations(a, b); }
+        };
+        sw(@selector(JSONObjectWithData:options:error:),
+           @selector(al_JSONObjectWithData:options:error:));
+    });
+}
+
++ (id)al_JSONObjectWithData:(NSData *)data options:(NSJSONReadingOptions)opt error:(NSError **)err {
+    id result = [self al_JSONObjectWithData:data options:opt error:err];
+    
+    if (err && *err) {
+        if (_inHook == 0) {
+            _inHook++;
+            ALOG(@"⚠️ JSON PARSE ERROR: %@", *err);
+            ALOG(@"Data: %@", hexBytes(data.bytes, MIN(data.length, 128)));
+            _inHook--;
+        }
+    }
+    
+    return result;
+}
+
+@end
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - NSData Base64 (LOG NGẮN)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@interface NSData (ALBase64) @end
+@implementation NSData (ALBase64)
+
++ (void)load {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = [NSData class];
+        Method a = class_getInstanceMethod(cls, @selector(base64EncodedStringWithOptions:));
+        Method b = class_getInstanceMethod(cls, @selector(al_base64EncodedStringWithOptions:));
+        if (a && b) { method_exchangeImplementations(a, b); }
+    });
+}
+
+- (NSString *)al_base64EncodedStringWithOptions:(NSDataBase64EncodingOptions)opts {
+    NSString *result = [self al_base64EncodedStringWithOptions:opts];
+    ALOG(@"🔡 B64 [%lu B] -> %@", (unsigned long)self.length, 
+         result.length > 100 ? [[result substringToIndex:100] stringByAppendingString:@"…"] : result);
+    return result;
+}
+
+@end
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - NSUserDefaults (CHỈ LOG SET)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static BOOL udAllow(NSString *key) {
+    if (!key) return NO;
+    static const char * const skip[] = {
+        "NS", "UI", "_UI", "_NS", "Apple", "com.apple",
+        "Log", "AK", "AG", "AB", "AC", "PKP", "WebKit",
+        "Bar", "Force", "RB", "Disable", NULL
+    };
+    const char *k = key.UTF8String;
+    for (int i = 0; skip[i]; i++) {
+        if (strncmp(k, skip[i], strlen(skip[i])) == 0) return NO;
+    }
+    return YES;
+}
+
+@interface NSUserDefaults (AL) @end
+@implementation NSUserDefaults (AL)
+
++ (void)load {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = [NSUserDefaults class];
+        void (^sw)(SEL,SEL) = ^(SEL a, SEL b) {
+            method_exchangeImplementations(class_getInstanceMethod(cls,a),
+                                           class_getInstanceMethod(cls,b));
+        };
+        sw(@selector(setObject:forKey:),  @selector(al_setObject:forKey:));
+        sw(@selector(setInteger:forKey:), @selector(al_setInteger:forKey:));
+        sw(@selector(setBool:forKey:),    @selector(al_setBool:forKey:));
+        sw(@selector(setFloat:forKey:),   @selector(al_setFloat:forKey:));
+        sw(@selector(setDouble:forKey:),  @selector(al_setDouble:forKey:));
+    });
+}
+
+- (void)al_setObject:(id)val forKey:(NSString *)key {
+    if (udAllow(key)) ALOG(@"💾 UD SET %@ = %@", key, val);
+    [self al_setObject:val forKey:key];
+}
+
+- (void)al_setInteger:(NSInteger)val forKey:(NSString *)key {
+    if (udAllow(key)) ALOG(@"💾 UD SET %@ = %ld", key, (long)val);
+    [self al_setInteger:val forKey:key];
+}
+
+- (void)al_setBool:(BOOL)val forKey:(NSString *)key {
+    if (udAllow(key)) ALOG(@"💾 UD SET %@ = %@", key, val ? @"YES" : @"NO");
+    [self al_setBool:val forKey:key];
+}
+
+- (void)al_setFloat:(float)val forKey:(NSString *)key {
+    if (udAllow(key)) ALOG(@"💾 UD SET %@ = %f", key, val);
+    [self al_setFloat:val forKey:key];
+}
+
+- (void)al_setDouble:(double)val forKey:(NSString *)key {
+    if (udAllow(key)) ALOG(@"💾 UD SET %@ = %f", key, val);
+    [self al_setDouble:val forKey:key];
+}
+@end
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - DYLD Interpose
+// ─────────────────────────────────────────────────────────────────────────────
+
+typedef struct { const void *replacement; const void *replacee; } interpose_t;
+
+__attribute__((used))
+static const interpose_t _interposes[]
+    __attribute__((section("__DATA,__interpose"))) = {
+    { (void *)al_CCCrypt,             (void *)CCCrypt             },
+    { (void *)al_CCHmac,              (void *)CCHmac              },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Constructor
+// ─────────────────────────────────────────────────────────────────────────────
+
+__attribute__((constructor))
+static void AppLoggerInit(void) {
+    NSLog(@"[AppLogger] 🚀 Logger v5.0 - FULL BODY LOG");
+    NSLog(@"[AppLogger] ═══════════════════════════════════════════════════════════════");
+}
+
+
+
+
+
+
+////////////////////////////////////////
+
+
+
+
+
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <Security/Security.h>
+#include <CommonCrypto/CommonCrypto.h>
+#include <dlfcn.h>
+#include <objc/runtime.h>
+#include <objc/message.h>
+#include <unistd.h>
+#include <execinfo.h>
+
+static _Thread_local int _inHook = 0;
+
+#define ALOG(fmt, ...) do { \
+    if (_inHook == 0) { \
+        _inHook++; \
+        NSLog(@"[AppLogger] " fmt, ##__VA_ARGS__); \
+        _inHook--; \
+    } \
+} while(0)
+
 #define GUARD_ENTER_RET(call) do { if (_inHook > 0) return (call); _inHook++; } while(0)
 #define GUARD_ENTER_VOID(call) do { if (_inHook > 0) { (call); return; } _inHook++; } while(0)
 #define GUARD_EXIT() do { _inHook--; } while(0)
