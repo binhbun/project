@@ -223,7 +223,7 @@ static double hooked_addCreditText(id self, SEL _cmd, double a3, double a4, doub
                 if ([subview isKindOfClass:[UILabel class]]) {
                     UILabel *label = (UILabel *)subview;
                     if (label.text && label.text.length > 0) {
-                        label.text = @"GMV MOBA";
+                        label.text = @"Hack Free VIP by GMV MOBA";
                         [label setNeedsDisplay];
                         break;
                     }
