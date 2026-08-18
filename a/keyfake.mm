@@ -10,10 +10,10 @@ static NSString *const kSavedUDID_V2 = @"GMV_UDID_DEVICE_V2";
 static UIAlertController *_currentUpdateAlert_V2 = nil; 
 
 static NSString * GetCurrentBID_V2() {
-    NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"com.gmv.unknown";
+    NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"com.gmvmoba.v2";
     NSMutableString *ms = [bid mutableCopy];
     CFStringTransform((__bridge CFMutableStringRef)ms, NULL, kCFStringTransformStripDiacritics, NO);
-    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789."];
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"999abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ."];
     return [[ms componentsSeparatedByCharactersInSet:[allowed invertedSet]] componentsJoinedByString:@""];
 }
 
