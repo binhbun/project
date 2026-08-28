@@ -10,7 +10,7 @@ __attribute__((visibility("hidden"))) static const unsigned char _url3s[] = {0x1
 __attribute__((visibility("hidden"))) static const unsigned char _url4s[] = {0x07, 0x25, 0x69, 0xD1, 0xC8, 0xF8, 0x3B, 0x6D, 0x8A, 0xDC, 0xB6, 0x2F, 0x7B, 0x8B, 0x00};
 __attribute__((visibility("hidden"))) static const unsigned char _url5s[] = {0x07, 0x25, 0x69, 0xD1, 0xCB, 0xEC, 0x20, 0x6B, 0x8A, 0xC2, 0xF7, 0x3B, 0x2C, 0x90, 0xDC, 0xEB, 0x00};
 
-__attribute__((visibility("hidden"))) static NSString* _f9a1c(const unsigned char *p) {
+__attribute__((visibility("hidden"))) static NSString* _621a1c(const unsigned char *p) {
     if (!p) return @"";
     NSMutableData *d = [NSMutableData data];
     NSUInteger n = 0, i = 0;
@@ -33,11 +33,11 @@ __attribute__((visibility("hidden"))) static NSString* _f9a1c(const unsigned cha
     return [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
 }
 
-__attribute__((visibility("hidden"))) static NSString* getAesKeyUrl(void) { return _f9a1c(_url1s); }
-__attribute__((visibility("hidden"))) static NSString* getCalmHost(void) { return _f9a1c(_url2s); }
-__attribute__((visibility("hidden"))) static NSString* getV1Host(void) { return _f9a1c(_url3s); }
-__attribute__((visibility("hidden"))) static NSString* getBaontqHost(void) { return _f9a1c(_url4s); }
-__attribute__((visibility("hidden"))) static NSString* getAuthtoolHost(void) { return _f9a1c(_url5s); }
+__attribute__((visibility("hidden"))) static NSString* getAesKeyUrl(void) { return _621a1c(_url1s); }
+__attribute__((visibility("hidden"))) static NSString* getCalmHost(void) { return _621a1c(_url2s); }
+__attribute__((visibility("hidden"))) static NSString* getV1Host(void) { return _621a1c(_url3s); }
+__attribute__((visibility("hidden"))) static NSString* getBaontqHost(void) { return _621a1c(_url4s); }
+__attribute__((visibility("hidden"))) static NSString* getAuthtoolHost(void) { return _621a1c(_url5s); }
 
 __attribute__((visibility("hidden"))) static NSString *verifiedBundleId = nil;
 __attribute__((visibility("hidden"))) static NSMutableDictionary *keyCache = nil;
