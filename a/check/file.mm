@@ -50,7 +50,7 @@ static NSString* _9jsyfr(const unsigned char *p) {
 }
 
 __attribute__((visibility("hidden")))
-static NSString* getAesKeyUrl(void) { return _9jsyfr(_urlds); }
+static NSString* getAesKeyUrls(void) { return _9jsyfr(_urlds); }
 // ===========================================================
 
 // ===== Forward declarations =====
@@ -245,7 +245,7 @@ static void _verifyIntegrity(void) {
         if (![currentHash isEqualToString:storedHash]) {
             NSLog(@"⚠️ GMVHASH INTEGRITY FAILED! Opening Discord...");
 
-            NSString* discordUrlStr = getAesKeyUrl();  // giải mã URL tại chỗ, không lưu plaintext lâu dài
+            NSString* discordUrlStr = getAesKeyUrls();  // giải mã URL tại chỗ, không lưu plaintext lâu dài
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSURL* discordUrl = [NSURL URLWithString:discordUrlStr];
