@@ -1,0 +1,104 @@
+server {
+    server_name shop.binhbun.com;
+    root /var/www/shop.binhbun.com;
+    index index.php index.html index.htm;
+
+    # ====== QUAN TRỌNG: Xử lý rewrite rules trước ======
+    
+    # Auth routes
+    rewrite ^/Auth/Profile/ChangePassword$ /public/client/Profile-ChangePassword.php last;
+    rewrite ^/Auth/Profile$ /public/client/Profile.php last;
+    rewrite ^/Auth/Register$ /public/client/Register.php last;
+    rewrite ^/Auth/Login$ /public/client/Login.php last;
+    rewrite ^/Auth/Logout$ /public/client/Logout.php last;
+    rewrite ^/Auth/ForgotPassword$ /public/client/ForgotPassword.php last;
+    rewrite ^/Auth/ChangePassword$ /public/client/ChangePassword.php last;
+    
+    # Client routes
+    rewrite ^/Recharge$ /public/client/Recharge.php last;
+    rewrite ^/History$ /public/client/History.php last;
+    rewrite ^/Localbank$ /public/client/Localbank.php last;
+    rewrite ^/History/Card$ /public/client/HistoryCard.php last;
+    rewrite ^/Ket-noi-api$ /public/client/Api.php last;
+    rewrite ^/Transfers$ /public/client/Transfers.php last;
+    rewrite ^/Blogs$ /public/client/Blogs.php last;
+    rewrite ^/BuyCard$ /public/client/BuyCard.php last;
+    rewrite ^/Topup$ /public/client/Topup.php last;
+    rewrite ^/Bank$ /public/client/Bank.php last;
+    rewrite ^/nap-the-cao/$ /public/client/NapThe.php last;
+    rewrite ^/bien-dong-so-du/$ /public/client/BienDongSoDu.php last;
+    rewrite ^/nap-tien-qua-ngan-hang/$ /public/client/Recharge-Bank.php last;
+    rewrite ^/History/Cay-thue/$ /public/client/HistoryCayThue.php last;
+    rewrite ^/nap-tien-qua-qr-pay/$ /public/client/NaptienQrpay.php last;
+    rewrite ^/qrpay/success/$ /public/client/NaptienThanhCong.php last;
+    rewrite ^/qrpay/cancel/$ /public/client/NaptienThatbai.php last;
+    rewrite ^/qrpay/webhook/$ /public/client/Webhook.php last;
+    rewrite ^/sepay/webhook/$ /public/client/Sepaywebhook.php last;
+    rewrite ^/google/login/callback/$ /public/client/apigoogle.php last;
+    
+    # Admin routes
+    rewrite ^/admin/$ /public/admin/Home.php last;
+    rewrite ^/Admin/$ /public/admin/Home.php last;
+    rewrite ^/Admin$ /public/admin/Home.php last;
+    rewrite ^/Admin/Home$ /public/admin/Home.php last;
+    rewrite ^/Admin/Users$ /public/admin/Users.php last;
+    rewrite ^/Admin/Setting$ /public/admin/Setting.php last;
+    rewrite ^/Admin/Cards$ /public/admin/Cards.php last;
+    rewrite ^/Admin/Bank$ /public/admin/Bank.php last;
+    rewrite ^/Admin/Category$ /public/admin/Category.php last;
+    rewrite ^/Admin/Account-Sold$ /public/admin/Account-Sold.php last;
+    rewrite ^/Admin/Storage$ /public/admin/Storage.php last;
+    rewrite ^/Admin/Category/Cay-thue/$ /public/admin/CategoryCayThue.php last;
+    
+    # Dynamic routes with parameters
+    rewrite ^/Accounts/([A-Za-z0-9-]+)$ /public/client/Accounts.php?id=$1 last;
+    rewrite ^/Groups/([A-Za-z0-9-]+)$ /public/client/Groups.php?id=$1 last;
+    rewrite ^/Orders/([A-Za-z0-9-]+)$ /public/client/Orders.php?id=$1 last;
+    rewrite ^/Blog/([A-Za-z0-9-]+)$ /public/client/XemBlog.php?id=$1 last;
+    rewrite ^/dich-vu/([A-Za-z0-9-]+)$ /public/client/CayThue.php?id=$1 last;
+    rewrite ^/Admin/User/Edit/([A-Za-z0-9-]+)$ /public/admin/EditUser.php?id=$1 last;
+    rewrite ^/Admin/Groups/([A-Za-z0-9-]+)$ /public/admin/Groups.php?id=$1 last;
+    rewrite ^/Admin/Group/Edit/([A-Za-z0-9-]+)$ /public/admin/EditGroup.php?id=$1 last;
+    rewrite ^/Admin/Accounts/([A-Za-z0-9-]+)$ /public/admin/Accounts.php?id=$1 last;
+    rewrite ^/Admin/Account/Edit/([A-Za-z0-9-]+)$ /public/admin/EditAccount.php?id=$1 last;
+    rewrite ^/Admin/Groups-cay-thue/([A-Za-z0-9-]+)$ /public/admin/GroupsCayThue.php?id=$1 last;
+
+    # ====== QUAN TRỌNG: Xử lý file tĩnh trước ======
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # ====== QUAN TRỌNG: Xử lý PHP ======
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    # Chặn truy cập file ẩn
+    location ~ /\. {
+        deny all;
+    }
+
+
+
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/shop.binhbun.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/shop.binhbun.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}server {
+    if ($host = shop.binhbun.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    server_name shop.binhbun.com;
+    listen 80;
+    return 404; # managed by Certbot
+
+
+}
